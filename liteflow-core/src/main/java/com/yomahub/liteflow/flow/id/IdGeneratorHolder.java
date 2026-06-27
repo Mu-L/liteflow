@@ -35,7 +35,7 @@ public class IdGeneratorHolder {
 			INSTANCE.setRequestIdGenerator(requestIdGenerator);
 		}
 		catch (Exception e) {
-			throw new RequestIdGeneratorException(e.getMessage());
+			throw new RequestIdGeneratorException(e.getMessage(), e);
 		}
 	}
 

@@ -188,7 +188,7 @@ public class FlowBus {
 			cmpClazz = Class.forName(cmpClazzStr);
 		}
 		catch (Exception e) {
-			throw new ComponentCannotRegisterException(e.getMessage());
+			throw new ComponentCannotRegisterException(e.getMessage(), e);
 		}
 		addNode(nodeId, name, nodeType, cmpClazz, null, null);
 	}
@@ -282,7 +282,7 @@ public class FlowBus {
         } catch (Exception e) {
 			String error = StrUtil.format("component[{}] register error", StrUtil.isEmpty(name) ? nodeId : StrUtil.format("{}({})", nodeId, name));
 			LOG.error(e.getMessage());
-			throw new ComponentCannotRegisterException(StrUtil.format("{} {}", error, e.getMessage()));
+			throw new ComponentCannotRegisterException(StrUtil.format("{} {}", error, e.getMessage()), e);
         }
     }
 
@@ -342,11 +342,11 @@ public class FlowBus {
                     + error;
 
             LOG.error(error, e);
-            throw new ComponentCannotRegisterException(StrUtil.format("{} {}", error, e.getMessage()));
+            throw new ComponentCannotRegisterException(StrUtil.format("{} {}", error, e.getMessage()), e);
         } catch (Exception e) {
 			String error = StrUtil.format("component[{}] register error", StrUtil.isEmpty(name) ? nodeId : StrUtil.format("{}({})", nodeId, name));
 			LOG.error(e.getMessage());
-			throw new ComponentCannotRegisterException(StrUtil.format("{} {}", error, e.getMessage()));
+			throw new ComponentCannotRegisterException(StrUtil.format("{} {}", error, e.getMessage()), e);
 		}
 	}
 

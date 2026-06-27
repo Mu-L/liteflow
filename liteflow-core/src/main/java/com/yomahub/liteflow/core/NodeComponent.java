@@ -102,6 +102,8 @@ public abstract class NodeComponent{
 		cmpStep.setRefNode(this.getRefNode());
 		cmpStep.setStartTime(new Date());
 		cmpStep.setThreadName(Thread.currentThread().getName());
+		cmpStep.setChainId(this.getRefNode().getCurrChainId());
+		cmpStep.setLoopIndex(this.getRefNode().getLoopIndex());
 		slot.addStep(cmpStep);
 
 		StopWatch stopWatch = new StopWatch();

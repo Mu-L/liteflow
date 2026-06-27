@@ -53,7 +53,7 @@ public class ParallelStrategyHelper {
             return strategyExecutor;
         } catch (Exception e) {
             LOG.error(e.getMessage());
-            throw new ParallelExecutorCreateException(e.getMessage());
+            throw new ParallelExecutorCreateException(e.getMessage(), e);
         }
     }
 

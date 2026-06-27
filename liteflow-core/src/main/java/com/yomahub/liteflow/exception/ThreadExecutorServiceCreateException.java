@@ -17,6 +17,11 @@ public class ThreadExecutorServiceCreateException extends RuntimeException {
 		this.message = message;
 	}
 
+	public ThreadExecutorServiceCreateException(String message, Throwable cause) {
+		super(message, cause);
+		this.message = message;
+	}
+
 	@Override
 	public String getMessage() {
 		return message;
