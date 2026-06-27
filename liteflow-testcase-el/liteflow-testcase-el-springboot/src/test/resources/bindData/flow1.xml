@@ -33,4 +33,17 @@
     <chain id="chain7">
         THEN(a, b.bind("k1", "test_b"), c).bind("k1", "test", true);
     </chain>
+
+    <!-- 以下链路用于：表达式级 bind 作用于含子 chain 引用的条件时，绝不能污染被共享的子 chain（#ID7OTO 回归保护） -->
+    <chain id="psub">
+        THEN(a);
+    </chain>
+
+    <chain id="pchainB">
+        THEN(psub);
+    </chain>
+
+    <chain id="pchainC">
+        THEN(d, psub).bind("k1", "outer");
+    </chain>
 </flow>
