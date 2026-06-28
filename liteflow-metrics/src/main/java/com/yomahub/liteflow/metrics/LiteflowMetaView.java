@@ -138,7 +138,7 @@ public class LiteflowMetaView {
         return m;
     }
 
-    private Map<String, Object> error(String msg) {
+    public Map<String, Object> error(String msg) {
         Map<String, Object> m = new LinkedHashMap<>();
         m.put("error", msg);
         return m;
