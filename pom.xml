@@ -40,6 +40,7 @@
 
 	<properties>
 		<revision>2.16.0</revision>
+		<micrometer.version>1.8.5</micrometer.version>
 		<skipTests>true</skipTests>
 		<project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
 		<project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
@@ -364,6 +365,11 @@
 				<artifactId>caffeine</artifactId>
 				<version>${caffeine.version}</version>
 			</dependency>
+			<dependency>
+				<groupId>io.micrometer</groupId>
+				<artifactId>micrometer-core</artifactId>
+				<version>${micrometer.version}</version>
+			</dependency>
 		</dependencies>
 	</dependencyManagement>
 
@@ -527,6 +533,7 @@
 				<module>liteflow-solon-plugin</module>
 				<module>liteflow-testcase-el</module>
 				<module>liteflow-el-builder</module>
+				<module>liteflow-metrics</module>
 				<module>liteflow-benchmark</module>
 			</modules>
 			<activation>
@@ -550,6 +557,7 @@
 				<module>liteflow-solon-plugin</module>
 				<module>liteflow-testcase-el</module>
 				<module>liteflow-el-builder</module>
+				<module>liteflow-metrics</module>
 				<module>liteflow-benchmark</module>
 				<module>liteflow-react-agent</module>
 			</modules>
@@ -565,6 +573,7 @@
 				<module>liteflow-spring</module>
 				<module>liteflow-solon-plugin</module>
 				<module>liteflow-el-builder</module>
+				<module>liteflow-metrics</module>
 			</modules>
 
 			<build>
