@@ -24,6 +24,8 @@ import com.yomahub.liteflow.flow.element.Node;
 import com.yomahub.liteflow.flow.entity.CmpStep;
 import com.yomahub.liteflow.flow.executor.DefaultNodeExecutor;
 import com.yomahub.liteflow.flow.executor.NodeExecutor;
+import com.yomahub.liteflow.lifecycle.LifeCycleHolder;
+import com.yomahub.liteflow.lifecycle.PostProcessNodeExecuteLifeCycle;
 import com.yomahub.liteflow.log.LFLog;
 import com.yomahub.liteflow.log.LFLoggerManager;
 import com.yomahub.liteflow.monitor.CompStatistics;
@@ -109,6 +111,15 @@ public abstract class NodeComponent{
 		StopWatch stopWatch = new StopWatch();
 		stopWatch.start();
 
+		// 节点执行异常引用，供 finally 中的生命周期钩子使用（成功为 null）
+		Exception nodeExecuteException = null;
+
+		// 节点执行生命周期（前）——list 形，可叠加，与 monitorBus 独立
+		List<PostProcessNodeExecuteLifeCycle> nodeExecuteLifeCycleList = LifeCycleHolder.getPostProcessNodeExecuteLifeCycleList();
+		if (!nodeExecuteLifeCycleList.isEmpty()) {
+			nodeExecuteLifeCycleList.forEach(lc -> lc.postProcessBeforeNodeExecute(self));
+		}
+
 		try {
 			LOG.info("[O]start component[{}] execution", self.getDisplayName());
 
@@ -128,6 +139,7 @@ public abstract class NodeComponent{
 			// 步骤状态设为false，并加入异常
 			cmpStep.setSuccess(false);
 			cmpStep.setException(e);
+			nodeExecuteException = e;
 
 			// 执行失败后回调方法
 			// 这里要注意，失败方法本身抛出错误，只打出堆栈，往外抛出的还是主要的异常
@@ -161,6 +173,12 @@ public abstract class NodeComponent{
 			if (ObjectUtil.isNotNull(monitorBus)) {
 				CompStatistics statistics = new CompStatistics(this.getClass().getSimpleName(), timeSpent);
 				monitorBus.addStatistics(statistics);
+			}
+
+			// 节点执行生命周期（后）——带上耗时与异常
+			if (!nodeExecuteLifeCycleList.isEmpty()) {
+				final Exception finalEx = nodeExecuteException;
+				nodeExecuteLifeCycleList.forEach(lc -> lc.postProcessAfterNodeExecute(self, timeSpent, finalEx));
 			}
 		}
 	}

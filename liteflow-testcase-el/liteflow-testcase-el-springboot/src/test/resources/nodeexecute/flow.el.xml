@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE flow PUBLIC  "liteflow" "liteflow.dtd">
+<flow>
+    <chain name="okChain">
+        THEN(neA, neA);
+    </chain>
+    <chain name="boomChain">
+        THEN(neA, neBoom);
+    </chain>
+</flow>
