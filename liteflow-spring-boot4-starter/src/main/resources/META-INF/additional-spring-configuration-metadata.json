@@ -514,6 +514,13 @@
       "type": "java.util.Map<java.lang.String,com.yomahub.liteflow.property.agent.PlatformCredential>",
       "description": "Credentials for Anthropic-compatible platforms, keyed by user-defined platform name.",
       "sourceType": "com.yomahub.liteflow.property.agent.AgentConfig"
+    },
+    {
+      "name": "liteflow.metrics.enabled",
+      "type": "java.lang.Boolean",
+      "description": "Whether to enable liteflow metrics collection (chain/node timers, counters and registry gauges). Requires a MeterRegistry on the classpath and in the context. Defaults to true.",
+      "sourceType": "com.yomahub.liteflow.springboot4.metrics.LiteflowMetricsAutoConfiguration",
+      "defaultValue": true
     }
   ]
 }
