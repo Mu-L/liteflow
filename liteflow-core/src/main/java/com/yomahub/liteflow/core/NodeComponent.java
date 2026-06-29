@@ -115,9 +115,15 @@ public abstract class NodeComponent{
 		Exception nodeExecuteException = null;
 
 		// 节点执行生命周期（前）——list 形，可叠加，与 monitorBus 独立
+		// 钩子异常不得中断节点执行（与 onError 的处理方式一致），否则会破坏 after-hook 的样本配对（active LongTaskTimer 泄漏）
 		List<PostProcessNodeExecuteLifeCycle> nodeExecuteLifeCycleList = LifeCycleHolder.getPostProcessNodeExecuteLifeCycleList();
 		if (!nodeExecuteLifeCycleList.isEmpty()) {
-			nodeExecuteLifeCycleList.forEach(lc -> lc.postProcessBeforeNodeExecute(self));
+			try {
+				nodeExecuteLifeCycleList.forEach(lc -> lc.postProcessBeforeNodeExecute(self));
+			}
+			catch (Exception ex) {
+				LOG.error(StrUtil.format("component[{}] postProcessBeforeNodeExecute lifecycle hook happens exception", this.getDisplayName()), ex);
+			}
 		}
 
 		try {
