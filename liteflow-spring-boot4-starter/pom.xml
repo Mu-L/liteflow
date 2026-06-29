@@ -71,6 +71,23 @@
                 <artifactId>spring-test</artifactId>
                 <version>7.0.7</version>
             </dependency>
+            <!-- 根 pom 显式管理 actuator=2.6.8 / micrometer=1.8.5（Boot2/3 版本），优先于本 pom 的 BOM import；
+                 故此处必须显式覆盖，强制对齐 Boot 4.0.6（actuator）与对应 Micrometer 1.16.5 -->
+            <dependency>
+                <groupId>io.micrometer</groupId>
+                <artifactId>micrometer-core</artifactId>
+                <version>1.16.5</version>
+            </dependency>
+            <dependency>
+                <groupId>org.springframework.boot</groupId>
+                <artifactId>spring-boot-actuator</artifactId>
+                <version>${springboot4.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.springframework.boot</groupId>
+                <artifactId>spring-boot-micrometer-metrics</artifactId>
+                <version>${springboot4.version}</version>
+            </dependency>
         </dependencies>
     </dependencyManagement>
 
@@ -89,6 +106,29 @@
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-configuration-processor</artifactId>
             <version>${springboot4.version}</version>
+            <optional>true</optional>
+        </dependency>
+        <!-- 指标与结构端点装配：actuator/micrometer 由 spring-boot-dependencies BOM(${springboot4.version}) 管理版本，故不带 version -->
+        <dependency>
+            <groupId>com.yomahub</groupId>
+            <artifactId>liteflow-metrics</artifactId>
+            <version>${revision}</version>
+        </dependency>
+        <dependency>
+            <groupId>io.micrometer</groupId>
+            <artifactId>micrometer-core</artifactId>
+            <optional>true</optional>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-actuator</artifactId>
+            <optional>true</optional>
+        </dependency>
+        <!-- Boot 4 把 MetricsAutoConfiguration / SimpleMetricsExportAutoConfiguration 迁至 spring-boot-micrometer-metrics
+             （org.springframework.boot.micrometer.metrics.autoconfigure 包），@AutoConfigureAfter 引用其需编译期可见 -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-micrometer-metrics</artifactId>
             <optional>true</optional>
         </dependency>
         <dependency>
