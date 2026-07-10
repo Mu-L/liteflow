@@ -315,6 +315,10 @@ public class RuleDbRuntime {
 				FlowBus.removeChain(id);
 			} else {
 				Long cur = CHAIN_VERSION_INDEX.get(id);
+				// spec §8.5 幂等：缓存版本 ≥ 通知版本则忽略（DELETE 分支不受此限）
+				if (cur != null && version < cur) {
+					return;
+				}
 				CHAIN_VERSION_INDEX.put(id, version);
 				if (cur == null) {
 					// 新增 chain：注册影子
@@ -329,6 +333,11 @@ public class RuleDbRuntime {
 				SCRIPT_CACHED_VERSION.remove(id);
 				FlowBus.unloadScriptNode(id);
 			} else {
+				Long cur = SCRIPT_VERSION_INDEX.get(id);
+				// spec §8.5 幂等：缓存版本 ≥ 通知版本则忽略（DELETE 分支不受此限）
+				if (cur != null && version < cur) {
+					return;
+				}
 				SCRIPT_VERSION_INDEX.put(id, version);
 				invalidateScriptCache(id);
 			}

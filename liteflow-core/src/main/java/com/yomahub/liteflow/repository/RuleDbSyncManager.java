@@ -35,20 +35,31 @@ public class RuleDbSyncManager {
 
 	private static final LFLog LOG = LFLoggerManager.getLogger(RuleDbSyncManager.class);
 
-	private static volatile ScheduledExecutorService scheduler;
+	private static volatile ScheduledExecutorService pollScheduler;
+
+	private static volatile ScheduledExecutorService reconcileScheduler;
+
+	/** stop() 后置 false，使订阅回调在 destroy 之后不再重新填充缓存（spec §8.5 幂等） */
+	private static volatile boolean running = false;
 
 	public static synchronized void start() {
+		running = true;
 		RuleDbConfig cfg = LiteflowConfigGetter.get().getRuleDb();
 		int seqPoll = seqPollSeconds(cfg);
 		int reconcile = cfg == null || cfg.getReconcileSeconds() == null ? 60 : cfg.getReconcileSeconds();
 
-		scheduler = Executors.newScheduledThreadPool(2, daemonFactory());
-		scheduler.scheduleWithFixedDelay(RuleDbSyncManager::pollOnceSafe, seqPoll, seqPoll, TimeUnit.SECONDS);
-		scheduler.scheduleWithFixedDelay(RuleDbSyncManager::reconcileOnceSafe, reconcile, reconcile, TimeUnit.SECONDS);
+		// 两个单线程调度器各自命名，便于线程转储区分轮询与对账任务
+		pollScheduler = Executors.newSingleThreadScheduledExecutor(daemonFactory("liteflow-rule-db-sync-poll"));
+		reconcileScheduler = Executors.newSingleThreadScheduledExecutor(daemonFactory("liteflow-rule-db-sync-reconcile"));
+		pollScheduler.scheduleWithFixedDelay(RuleDbSyncManager::pollOnceSafe, seqPoll, seqPoll, TimeUnit.SECONDS);
+		reconcileScheduler.scheduleWithFixedDelay(RuleDbSyncManager::reconcileOnceSafe, reconcile, reconcile, TimeUnit.SECONDS);
 
-		// 可选订阅推送（Redis 实现；SQL/InMemory 空实现）
+		// 可选订阅推送（Redis 实现；SQL/InMemory 空实现）；running 标志守卫，stop() 后回调 no-op
 		try {
 			RuleRepositoryHolder.get().subscribe(changes -> {
+				if (!running) {
+					return;
+				}
 				for (ChangeRecord c : changes) {
 					RuleDbRuntime.applyChange(c);
 					advanceSeq(c.getSeq());
@@ -130,18 +141,24 @@ public class RuleDbSyncManager {
 		}
 	}
 
-	private static ThreadFactory daemonFactory() {
+	private static ThreadFactory daemonFactory(String name) {
 		return r -> {
-			Thread t = new Thread(r, "liteflow-rule-db-sync");
+			Thread t = new Thread(r, name);
 			t.setDaemon(true);
 			return t;
 		};
 	}
 
 	public static synchronized void stop() {
-		if (scheduler != null) {
-			scheduler.shutdownNow();
-			scheduler = null;
+		// 先置 false：订阅回调若在 shutdown 期间触发则 no-op，避免 destroy 后重新填充缓存
+		running = false;
+		if (pollScheduler != null) {
+			pollScheduler.shutdownNow();
+			pollScheduler = null;
+		}
+		if (reconcileScheduler != null) {
+			reconcileScheduler.shutdownNow();
+			reconcileScheduler = null;
 		}
 	}
 }
