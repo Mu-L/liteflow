@@ -216,6 +216,8 @@ ChangeWatcher 拿到 `fetchChangesSince(lastAppliedSeq)` 后逐条处理，处�
 - **Reconciler**（默认 60s）：拉清单全量 diff（先比 version，相同再比 md5），修正索引与缓存、快进 lastAppliedSeq。覆盖 pub/sub 丢消息、change_log 被清理、订阅断线窗口。
 - **收敛保证**：任何变更最迟在 `max(通知延迟, seq 轮询周期, 对账周期)` 内被所有节点感知；版本号单调递增，不会新旧回跳。
 
+> 实现注记（2026-07-10）：v1 的"分级刷新"以惰性失效落地——驻留条目收到变更后失效缓存态、下次执行懒加载新版，配合执行中持有旧 conditionList 引用跑完的既有语义达成不中断切换。"后台预编译零首个请求延迟"作为后续增强。
+
 ### 8.5 并发与竞态
 
 - 同一 chain 冷启动并发：Chain 对象上 double-checked locking，仅一个线程回源。

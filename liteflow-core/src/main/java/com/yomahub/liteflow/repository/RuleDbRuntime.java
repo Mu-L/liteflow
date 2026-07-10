@@ -15,6 +15,7 @@ import com.yomahub.liteflow.meta.LiteflowMetaOperator;
 import com.yomahub.liteflow.property.LiteflowConfig;
 import com.yomahub.liteflow.property.LiteflowConfigGetter;
 import com.yomahub.liteflow.property.RuleDbConfig;
+import com.yomahub.liteflow.repository.vo.ChangeRecord;
 import com.yomahub.liteflow.repository.vo.ChainMeta;
 import com.yomahub.liteflow.repository.vo.ChainRecord;
 import com.yomahub.liteflow.repository.vo.RuleManifest;
@@ -23,8 +24,10 @@ import com.yomahub.liteflow.repository.vo.ScriptRecord;
 import com.yomahub.liteflow.util.ElRegexUtil;
 
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
 
@@ -95,6 +98,9 @@ public class RuleDbRuntime {
 			capacity = cacheCfg.getCacheCapacity();
 		}
 		RuleDbCache.init(capacity);
+
+		// 启动变更同步（seq 轮询 + 可选订阅 + 周期对账）
+		RuleDbSyncManager.start();
 
 		// 预热
 		preload();
@@ -292,7 +298,93 @@ public class RuleDbRuntime {
 		}
 	}
 
+	/**
+	 * 单条变更处理（分级刷新 / 惰性失效）：
+	 * - UPSERT chain：更新索引版本；新增则注册影子；复用 {@link #invalidateChainCache} 失效缓存态，下次执行懒加载新版。
+	 * - UPSERT script：更新索引；复用 {@link #invalidateScriptCache} 清缓存态让下次 getInstance 回源重编。
+	 * - DELETE：移除索引 + 缓存态 + FlowBus 中的条目。
+	 * 由 {@link RuleDbSyncManager} 的轮询/订阅路径回调。
+	 */
+	public static void applyChange(ChangeRecord change) {
+		String id = change.getTargetId();
+		long version = change.getVersion();
+		if (change.getTargetType() == ChangeRecord.TargetType.CHAIN) {
+			if (change.getOp() == ChangeRecord.Op.DELETE) {
+				CHAIN_VERSION_INDEX.remove(id);
+				CHAIN_CACHED_VERSION.remove(id);
+				FlowBus.removeChain(id);
+			} else {
+				Long cur = CHAIN_VERSION_INDEX.get(id);
+				CHAIN_VERSION_INDEX.put(id, version);
+				if (cur == null) {
+					// 新增 chain：注册影子
+					FlowBus.addChain(id);
+				}
+				// 缓存态失效：置为过期，下次 ensureChainLoaded 回源
+				invalidateChainCache(id);
+			}
+		} else {
+			if (change.getOp() == ChangeRecord.Op.DELETE) {
+				SCRIPT_VERSION_INDEX.remove(id);
+				SCRIPT_CACHED_VERSION.remove(id);
+				FlowBus.unloadScriptNode(id);
+			} else {
+				SCRIPT_VERSION_INDEX.put(id, version);
+				invalidateScriptCache(id);
+			}
+		}
+	}
+
+	/**
+	 * 全量对账：以 manifest 为准修正索引与缓存。
+	 * version 不一致触发 UPSERT（惰性失效）；清单中已消失的条目触发 DELETE；
+	 * 新增 script（索引中无）登记影子。version 相同再比 md5 的兜底交由 SQL/Redis 实现在 fetch 时保证。
+	 * 由 {@link RuleDbSyncManager#reconcileOnce()} 回调。
+	 */
+	public static void reconcile(RuleManifest manifest) {
+		Set<String> liveChains = new HashSet<>();
+		if (manifest.getChains() != null) {
+			for (ChainMeta cm : manifest.getChains()) {
+				liveChains.add(cm.getChainId());
+				Long cur = CHAIN_VERSION_INDEX.get(cm.getChainId());
+				if (cur == null || cur != cm.getVersion()) {
+					applyChange(new ChangeRecord(0, ChangeRecord.TargetType.CHAIN,
+							cm.getChainId(), ChangeRecord.Op.UPSERT, cm.getVersion()));
+				}
+			}
+		}
+		// 清单中已消失的 chain（且属 rule-db 管理）删除
+		for (String chainId : new ArrayList<>(CHAIN_VERSION_INDEX.keySet())) {
+			if (!liveChains.contains(chainId)) {
+				applyChange(new ChangeRecord(0, ChangeRecord.TargetType.CHAIN,
+						chainId, ChangeRecord.Op.DELETE, 0));
+			}
+		}
+		Set<String> liveScripts = new HashSet<>();
+		if (manifest.getScripts() != null) {
+			for (ScriptMeta sm : manifest.getScripts()) {
+				liveScripts.add(sm.getNodeId());
+				Long cur = SCRIPT_VERSION_INDEX.get(sm.getNodeId());
+				if (cur == null) {
+					// 新增脚本：登记影子 Node + 版本戳
+					SCRIPT_VERSION_INDEX.put(sm.getNodeId(), sm.getVersion());
+					registerShadowScript(sm);
+				} else if (cur != sm.getVersion()) {
+					applyChange(new ChangeRecord(0, ChangeRecord.TargetType.SCRIPT,
+							sm.getNodeId(), ChangeRecord.Op.UPSERT, sm.getVersion()));
+				}
+			}
+		}
+		for (String nodeId : new ArrayList<>(SCRIPT_VERSION_INDEX.keySet())) {
+			if (!liveScripts.contains(nodeId)) {
+				applyChange(new ChangeRecord(0, ChangeRecord.TargetType.SCRIPT,
+						nodeId, ChangeRecord.Op.DELETE, 0));
+			}
+		}
+	}
+
 	public static synchronized void destroy() {
+		RuleDbSyncManager.stop();
 		RuleDbCache.destroy();
 		CHAIN_VERSION_INDEX.clear();
 		SCRIPT_VERSION_INDEX.clear();
