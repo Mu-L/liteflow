@@ -335,13 +335,18 @@ public class LiteFlowChainELBuilder {
 
 	public static void buildUnCompileChain(Chain chain){
 		// Rule-DB 模式：影子/失效 chain 先回源填 EL
-		if (com.yomahub.liteflow.repository.RuleDbRuntime.isActive()){
+		boolean ruleDbActive = com.yomahub.liteflow.repository.RuleDbRuntime.isActive();
+		if (ruleDbActive){
 			com.yomahub.liteflow.repository.RuleDbRuntime.ensureChainLoaded(chain.getChainId());
 		}
 		if (StrUtil.isBlank(chain.getEl())){
 			throw new FlowSystemException(StrUtil.format("no el content in this unCompile chain[{}]", chain.getChainId()));
 		}
 		fromChain(chain).compileChain();
+		// Rule-DB 模式：编译成功后登记缓存 + 脚本引用计数
+		if (ruleDbActive){
+			com.yomahub.liteflow.repository.RuleDbRuntime.recordCompiledChain(chain.getChainId());
+		}
 	}
 
 	@SuppressWarnings("unchecked")

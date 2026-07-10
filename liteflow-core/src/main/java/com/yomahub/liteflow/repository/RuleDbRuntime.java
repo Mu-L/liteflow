@@ -11,6 +11,7 @@ import com.yomahub.liteflow.flow.element.Chain;
 import com.yomahub.liteflow.flow.element.Node;
 import com.yomahub.liteflow.log.LFLog;
 import com.yomahub.liteflow.log.LFLoggerManager;
+import com.yomahub.liteflow.meta.LiteflowMetaOperator;
 import com.yomahub.liteflow.property.LiteflowConfig;
 import com.yomahub.liteflow.property.LiteflowConfigGetter;
 import com.yomahub.liteflow.property.RuleDbConfig;
@@ -21,6 +22,8 @@ import com.yomahub.liteflow.repository.vo.ScriptMeta;
 import com.yomahub.liteflow.repository.vo.ScriptRecord;
 import com.yomahub.liteflow.util.ElRegexUtil;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
@@ -84,6 +87,14 @@ public class RuleDbRuntime {
 		}
 		LAST_APPLIED_SEQ.set(manifest.getLatestSeq());
 		initialized = true;
+
+		// 初始化有界缓存（容量按 chain 条数）
+		int capacity = 500;
+		RuleDbConfig cacheCfg = LiteflowConfigGetter.get().getRuleDb();
+		if (cacheCfg != null && cacheCfg.getCacheCapacity() != null) {
+			capacity = cacheCfg.getCacheCapacity();
+		}
+		RuleDbCache.init(capacity);
 
 		// 预热
 		preload();
@@ -211,6 +222,20 @@ public class RuleDbRuntime {
 		return ruleDb == null || ruleDb.getFetchRetryTimes() == null ? 3 : ruleDb.getFetchRetryTimes();
 	}
 
+	/** 编译完成后登记：chain 驻留缓存 + 收集引用的脚本节点（引用计数+1） */
+	public static void recordCompiledChain(String chainId) {
+		List<String> scriptRefs = new ArrayList<>();
+		try {
+			for (Node n : LiteflowMetaOperator.getNodes(chainId)) {
+				if (n.getType() != null && n.getType().isScript() && SCRIPT_VERSION_INDEX.containsKey(n.getId())) {
+					scriptRefs.add(n.getId());
+				}
+			}
+		} catch (Exception ignored) {
+		}
+		RuleDbCache.recordChainAccess(chainId, scriptRefs);
+	}
+
 	// ---- 索引/缓存态操作，供 Task 4/5 的 Cache/SyncManager 使用 ----
 
 	public static Long getChainVersion(String chainId) {
@@ -268,6 +293,7 @@ public class RuleDbRuntime {
 	}
 
 	public static synchronized void destroy() {
+		RuleDbCache.destroy();
 		CHAIN_VERSION_INDEX.clear();
 		SCRIPT_VERSION_INDEX.clear();
 		CHAIN_CACHED_VERSION.clear();
