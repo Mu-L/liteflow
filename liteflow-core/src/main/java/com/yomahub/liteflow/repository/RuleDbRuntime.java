@@ -57,14 +57,29 @@ public class RuleDbRuntime {
 
 	private static volatile boolean initialized = false;
 
+	/**
+	 * isActive() 结果缓存：该标志在运行期不会改变（SPI 实现是否在 classpath、enabled 配置均固定），
+	 * 但每次 buildUnCompileChain/compileScriptNode 都会调用，而 RuleRepositoryHolder.hasImplementation()
+	 * 内部的 get() 是 synchronized —— 缓存后彻底脱离 holder 监视器热路径。
+	 * destroy() 置 null，下次 init 重算（也使非 rule-db 应用在 destroy 后不残留过期 true）。
+	 */
+	private static volatile Boolean activeFlag;
+
 	public static boolean isActive() {
+		Boolean cached = activeFlag;
+		if (cached != null) {
+			return cached;
+		}
 		if (!RuleRepositoryHolder.hasImplementation()) {
+			activeFlag = Boolean.FALSE;
 			return false;
 		}
 		LiteflowConfig config = LiteflowConfigGetter.get();
 		RuleDbConfig ruleDb = config.getRuleDb();
 		// 未显式配置 ruleDb 但 classpath 有实现，也视为激活（零配置理念）
-		return ruleDb == null || ruleDb.getEnabled() == null || Boolean.TRUE.equals(ruleDb.getEnabled());
+		boolean result = ruleDb == null || ruleDb.getEnabled() == null || Boolean.TRUE.equals(ruleDb.getEnabled());
+		activeFlag = result;
+		return result;
 	}
 
 	public static synchronized void init() {
@@ -248,18 +263,6 @@ public class RuleDbRuntime {
 		return CHAIN_VERSION_INDEX.get(chainId);
 	}
 
-	public static void putChainVersion(String chainId, long version) {
-		CHAIN_VERSION_INDEX.put(chainId, version);
-	}
-
-	public static void putScriptVersion(String nodeId, long version) {
-		SCRIPT_VERSION_INDEX.put(nodeId, version);
-	}
-
-	public static Map<String, Long> chainVersionIndex() {
-		return CHAIN_VERSION_INDEX;
-	}
-
 	public static Map<String, Long> scriptVersionIndex() {
 		return SCRIPT_VERSION_INDEX;
 	}
@@ -270,12 +273,6 @@ public class RuleDbRuntime {
 
 	static void onScriptEvicted(String nodeId) {
 		SCRIPT_CACHED_VERSION.remove(nodeId);
-	}
-
-	/** Task 5 的 applyChange/reconcile 使用的影子注册（清单新增 chain 时） */
-	static void registerShadowChain(String chainId) {
-		CHAIN_VERSION_INDEX.put(chainId, 0L);
-		FlowBus.addChain(chainId);
 	}
 
 	/** 缓存态失效（Task 5 分级刷新用） */
@@ -401,6 +398,8 @@ public class RuleDbRuntime {
 		SCRIPT_CACHED_VERSION.clear();
 		LAST_APPLIED_SEQ.set(0);
 		initialized = false;
+		// 重置 isActive 缓存，使下次 init 重新计算（非 rule-db 应用 destroy 后也不残留过期 true）
+		activeFlag = null;
 		RuleRepository repo = RuleRepositoryHolder.get();
 		if (repo != null) {
 			try {

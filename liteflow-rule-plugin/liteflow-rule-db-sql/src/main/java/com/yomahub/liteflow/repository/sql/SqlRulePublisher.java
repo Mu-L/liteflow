@@ -33,8 +33,7 @@ public class SqlRulePublisher {
 		try (Connection c = connectionManager.getConnection()) {
 			c.setAutoCommit(false);
 			try {
-				long version = currentChainVersion(c, chainId) + 1;
-				upsertChain(c, chainId, el, md5, version);
+				long version = upsertChain(c, chainId, el, md5);
 				insertChangeLog(c, "CHAIN", chainId, "UPSERT", version);
 				c.commit();
 				return version;
@@ -52,8 +51,7 @@ public class SqlRulePublisher {
 		try (Connection c = connectionManager.getConnection()) {
 			c.setAutoCommit(false);
 			try {
-				long version = currentScriptVersion(c, s.getNodeId()) + 1;
-				upsertScript(c, s, md5, version);
+				long version = upsertScript(c, s, md5);
 				insertChangeLog(c, "SCRIPT", s.getNodeId(), "UPSERT", version);
 				c.commit();
 				return version;
@@ -132,49 +130,57 @@ public class SqlRulePublisher {
 		}
 	}
 
-	private void upsertChain(Connection c, String chainId, String el, String md5, long version) throws SQLException {
+	/**
+	 * UPSERT chain 行并返回新版本号。
+	 * 已有行：{@code version = version + 1} 在行锁下原子自增（spec §7），同事务内 SELECT 取回新版本；
+	 * 新行：插入 version=1。不再先 SELECT 再 Java+1（原 read-modify-write 在并发发布时丢更新）。
+	 */
+	private long upsertChain(Connection c, String chainId, String el, String md5) throws SQLException {
 		int updated;
 		try (PreparedStatement ps = c.prepareStatement("UPDATE " + dialect.chainTable()
-				+ " SET el_data = ?, content_md5 = ?, version = ?, enable = 1, gmt_modified = CURRENT_TIMESTAMP"
+				+ " SET el_data = ?, content_md5 = ?, version = version + 1, enable = 1, gmt_modified = CURRENT_TIMESTAMP"
 				+ " WHERE application_name = ? AND chain_id = ?")) {
 			ps.setString(1, el);
 			ps.setString(2, md5);
-			ps.setLong(3, version);
-			ps.setString(4, app());
-			ps.setString(5, chainId);
+			ps.setString(3, app());
+			ps.setString(4, chainId);
 			updated = ps.executeUpdate();
 		}
 		if (updated == 0) {
 			try (PreparedStatement ps = c.prepareStatement("INSERT INTO " + dialect.chainTable()
-					+ " (application_name, chain_id, el_data, content_md5, version, enable) VALUES (?, ?, ?, ?, ?, 1)")) {
+					+ " (application_name, chain_id, el_data, content_md5, version, enable) VALUES (?, ?, ?, ?, 1, 1)")) {
 				ps.setString(1, app());
 				ps.setString(2, chainId);
 				ps.setString(3, el);
 				ps.setString(4, md5);
-				ps.setLong(5, version);
 				ps.executeUpdate();
 			}
+			return 1;
 		}
+		// UPDATE 已原子自增，同事务内 SELECT 取回新版本供 change_log 使用
+		return currentChainVersion(c, chainId);
 	}
 
-	private void upsertScript(Connection c, ScriptRecord s, String md5, long version) throws SQLException {
+	/**
+	 * UPSERT script 行并返回新版本号（同 {@link #upsertChain} 的原子自增策略，spec §7）。
+	 */
+	private long upsertScript(Connection c, ScriptRecord s, String md5) throws SQLException {
 		int updated;
 		try (PreparedStatement ps = c.prepareStatement("UPDATE " + dialect.scriptTable()
-				+ " SET script_data = ?, script_name = ?, script_type = ?, script_language = ?, content_md5 = ?, version = ?, enable = 1, gmt_modified = CURRENT_TIMESTAMP"
+				+ " SET script_data = ?, script_name = ?, script_type = ?, script_language = ?, content_md5 = ?, version = version + 1, enable = 1, gmt_modified = CURRENT_TIMESTAMP"
 				+ " WHERE application_name = ? AND node_id = ?")) {
 			ps.setString(1, s.getScript());
 			ps.setString(2, s.getName());
 			ps.setString(3, s.getType());
 			ps.setString(4, s.getLanguage());
 			ps.setString(5, md5);
-			ps.setLong(6, version);
-			ps.setString(7, app());
-			ps.setString(8, s.getNodeId());
+			ps.setString(6, app());
+			ps.setString(7, s.getNodeId());
 			updated = ps.executeUpdate();
 		}
 		if (updated == 0) {
 			try (PreparedStatement ps = c.prepareStatement("INSERT INTO " + dialect.scriptTable()
-					+ " (application_name, node_id, script_data, script_name, script_type, script_language, content_md5, version, enable) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1)")) {
+					+ " (application_name, node_id, script_data, script_name, script_type, script_language, content_md5, version, enable) VALUES (?, ?, ?, ?, ?, ?, ?, 1, 1)")) {
 				ps.setString(1, app());
 				ps.setString(2, s.getNodeId());
 				ps.setString(3, s.getScript());
@@ -182,10 +188,11 @@ public class SqlRulePublisher {
 				ps.setString(5, s.getType());
 				ps.setString(6, s.getLanguage());
 				ps.setString(7, md5);
-				ps.setLong(8, version);
 				ps.executeUpdate();
 			}
+			return 1;
 		}
+		return currentScriptVersion(c, s.getNodeId());
 	}
 
 	private void insertChangeLog(Connection c, String targetType, String targetId, String op, long version)

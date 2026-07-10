@@ -36,7 +36,16 @@ public class SqlRuleRepository implements RuleRepository {
 
 	private Connection conn() throws SQLException {
 		Connection c = connectionManager.getConnection();
-		ensureTables(c);
+		try {
+			ensureTables(c);
+		} catch (RuntimeException e) {
+			// 建表失败时关闭已借出的连接，避免泄漏（调用方的 try-with-resources 尚未接管）
+			try {
+				c.close();
+			} catch (Exception ignored) {
+			}
+			throw e;
+		}
 		return c;
 	}
 
@@ -84,7 +93,20 @@ public class SqlRuleRepository implements RuleRepository {
 			}
 			manifest.setChains(chains);
 			manifest.setScripts(scripts);
-			manifest.setLatestSeq(fetchLatestSeq());
+			// 内联 MAX(seq) 查询复用当前连接 c，不再调 fetchLatestSeq()（后者会再借一条连接，
+			// 在 HikariCP maximumPoolSize=1 时与已持有的 c 自死锁）
+			String seqSql = "SELECT MAX(seq) FROM " + dialect.changeLogTable() + " WHERE application_name = ?";
+			try (PreparedStatement seqPs = c.prepareStatement(seqSql)) {
+				seqPs.setString(1, app());
+				try (ResultSet rs = seqPs.executeQuery()) {
+					if (rs.next()) {
+						long v = rs.getLong(1);
+						manifest.setLatestSeq(rs.wasNull() ? 0 : v);
+					} else {
+						manifest.setLatestSeq(0);
+					}
+				}
+			}
 		} catch (SQLException e) {
 			throw wrap("fetchManifest", e);
 		}

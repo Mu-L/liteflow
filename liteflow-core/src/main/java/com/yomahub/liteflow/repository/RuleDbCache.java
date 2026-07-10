@@ -10,6 +10,7 @@ import com.yomahub.liteflow.log.LFLog;
 import com.yomahub.liteflow.log.LFLoggerManager;
 import com.yomahub.liteflow.script.ScriptExecutorFactory;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
@@ -74,12 +75,29 @@ public class RuleDbCache {
 		if (refs == null) {
 			return;
 		}
+		List<String> toUnload = new ArrayList<>();
 		for (String nodeId : refs) {
-			AtomicInteger count = SCRIPT_REF_COUNT.get(nodeId);
-			if (count != null && count.decrementAndGet() <= 0) {
-				SCRIPT_REF_COUNT.remove(nodeId);
-				unloadScript(nodeId);
+			// 原子化 decrement-and-unload 决策：compute 在 ConcurrentHashMap 桶锁下完成减法与移除，
+			// 避免与并发 recordChainAccess 的 computeIfAbsent 跨操作竞争（原 get→decrement→remove
+			// 序列中，并发 increment 可能被随后的 stale remove 吞掉）。compute 返回 null 表示归零移除，
+			// 由 releaseRefs 在 compute 之外触发 unload（不在 compute 内 mutate 外部状态）。
+			boolean[] shouldUnload = {false};
+			SCRIPT_REF_COUNT.compute(nodeId, (k, count) -> {
+				if (count == null) {
+					return null; // 无计数条目，不做任何操作
+				}
+				if (count.decrementAndGet() <= 0) {
+					shouldUnload[0] = true;
+					return null; // 归零：原子移除条目，信号留给调用方 unload
+				}
+				return count; // 仍有引用，保留
+			});
+			if (shouldUnload[0]) {
+				toUnload.add(nodeId);
 			}
+		}
+		for (String nodeId : toUnload) {
+			unloadScript(nodeId);
 		}
 	}
 

@@ -126,6 +126,10 @@ public class RuleDbSyncManager {
 	}
 
 	private static void pollOnceSafe() {
+		// destroy 期间正在调度的轮询任务在此 no-op，避免 destroy 清空后又写入缓存
+		if (!running) {
+			return;
+		}
 		try {
 			pollOnce();
 		} catch (Exception e) {
@@ -134,6 +138,10 @@ public class RuleDbSyncManager {
 	}
 
 	private static void reconcileOnceSafe() {
+		// destroy 期间正在调度的对账任务在此 no-op，避免 destroy 清空后又写入缓存
+		if (!running) {
+			return;
+		}
 		try {
 			reconcileOnce();
 		} catch (Exception e) {

@@ -41,9 +41,12 @@ public class RuleDbEvictionTest extends BaseRuleDbTest {
 
 	@Test
 	public void testScriptRefCountUnloadOnEviction() {
-		InMemoryRuleRepository.putChain("cs1", "THEN(a, sx)");
-		InMemoryRuleRepository.putChain("cs2", "THEN(b, sx)");
-		InMemoryRuleRepository.putScript("sx", "defaultContext.setData(\"sx\", true);", "script", "groovy");
+		// 两个 chain 各自独占一个脚本：cs1→sx1, cs2→sx2
+		// cacheCapacity=1 时 cs2 驻留必然淘汰 cs1，其独占脚本 sx1 引用计数归零被 unload
+		InMemoryRuleRepository.putChain("cs1", "THEN(a, sx1)");
+		InMemoryRuleRepository.putChain("cs2", "THEN(b, sx2)");
+		InMemoryRuleRepository.putScript("sx1", "defaultContext.setData(\"sx1\", true);", "script", "groovy");
+		InMemoryRuleRepository.putScript("sx2", "defaultContext.setData(\"sx2\", true);", "script", "groovy");
 		registerCommonCmp();
 		RuleDbConfig cfg = new RuleDbConfig();
 		cfg.setCacheCapacity(1); // 一次只容一个 chain
@@ -53,7 +56,10 @@ public class RuleDbEvictionTest extends BaseRuleDbTest {
 		executor.execute2Resp("cs2", "arg");
 		RuleDbCache.cleanUp();
 
-		// 两个 chain 引用同一脚本，容量 1 时最终至多一个 chain 驻留，引用计数 <= 1
-		Assertions.assertTrue(RuleDbCache.scriptRefCount("sx") <= 1);
+		// cs1 被淘汰，其独占脚本 sx1 引用计数归零并被 unload
+		Assertions.assertEquals(0, RuleDbCache.scriptRefCount("sx1"),
+				"evicted chain's exclusive script should have refcount 0 (unloaded)");
+		// cs2 仍驻留，sx2 引用计数为 1
+		Assertions.assertEquals(1, RuleDbCache.scriptRefCount("sx2"));
 	}
 }
