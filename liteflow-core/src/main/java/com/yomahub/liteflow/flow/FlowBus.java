@@ -271,6 +271,10 @@ public class FlowBus {
 	}
 
 	public static void compileScriptNode(Node node) {
+		// Rule-DB 模式：脚本影子/失效先回源填 script（传 node 本体：EL 编译期会 clone Node）
+		if (com.yomahub.liteflow.repository.RuleDbRuntime.isActive()){
+			com.yomahub.liteflow.repository.RuleDbRuntime.ensureScriptLoaded(node);
+		}
 		String nodeId = node.getId(), name = node.getName(), script = node.getScript(), language = node.getLanguage();
 		NodeTypeEnum type = node.getType();
         try {

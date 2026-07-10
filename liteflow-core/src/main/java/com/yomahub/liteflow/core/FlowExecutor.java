@@ -120,6 +120,15 @@ public class FlowExecutor {
 			initChainCache();
 		}
 
+		// Rule-DB 模式：classpath 存在 RuleRepository 实现且启用
+		if (com.yomahub.liteflow.repository.RuleDbRuntime.isActive()) {
+			if (StrUtil.isNotBlank(liteflowConfig.getRuleSource())) {
+				throw new ConfigErrorException("rule-source and rule-db mode cannot be used together, please remove one of them");
+			}
+			com.yomahub.liteflow.repository.RuleDbRuntime.init();
+			return;
+		}
+
 		String ruleSource = liteflowConfig.getRuleSource();
 		if (StrUtil.isBlank(ruleSource)) {
 			// 查看有没有Parser的SPI实现

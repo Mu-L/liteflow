@@ -334,6 +334,10 @@ public class LiteFlowChainELBuilder {
 	}
 
 	public static void buildUnCompileChain(Chain chain){
+		// Rule-DB 模式：影子/失效 chain 先回源填 EL
+		if (com.yomahub.liteflow.repository.RuleDbRuntime.isActive()){
+			com.yomahub.liteflow.repository.RuleDbRuntime.ensureChainLoaded(chain.getChainId());
+		}
 		if (StrUtil.isBlank(chain.getEl())){
 			throw new FlowSystemException(StrUtil.format("no el content in this unCompile chain[{}]", chain.getChainId()));
 		}
