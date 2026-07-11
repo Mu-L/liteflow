@@ -61,7 +61,7 @@ Rule-DB 模式把这两件事一次性解决：
 </dependency>
 ```
 
-> Spring Boot 4 项目把 starter 换成 `liteflow-spring-boot4-starter`；Solon 项目用 `liteflow-solon-plugin`。三个 starter 都已内置 `liteflow.rule-db.*` 配置绑定与 IDE 自动补全元数据。
+> Spring Boot 4 项目把 starter 换成 `liteflow-spring-boot4-starter`；Solon 项目用 `liteflow-solon-plugin`。Spring Boot 两个 starter（`liteflow-spring-boot-starter` / `liteflow-spring-boot4-starter`）已内置 `liteflow.rule-db.*` 配置绑定与 IDE 自动补全元数据；Solon 插件支持配置绑定，但**不携带** Spring 风格的 IDE 元数据文件。
 
 ### Step 2：写配置（三种姿势，按需选最省事的）
 
@@ -88,6 +88,8 @@ liteflow.rule-db.auto-init-table=true
 ### Step 3：发布第一条规则
 
 用插件提供的 `SqlRulePublisher` 写入规则。这个 API **可独立使用**——管理后台只依赖这一个 jar 就能调，不需要拉起 FlowExecutor。
+
+> **非 Spring 环境**：Publisher 的无参构造通过 `LiteflowConfigGetter.get().getRuleDb()` 读取全局 `liteflow.rule-db.*` 配置。在非 Spring 的管理后台里，需先加载/初始化好 `liteflow.rule-db.*` 配置（填充 `LiteflowConfig`）才能调用 `new SqlRulePublisher()` + 发布 API，否则会因读不到 `RuleDbConfig` 而 NPE / 抛 `ConfigErrorException`。
 
 ```java
 import com.yomahub.liteflow.repository.sql.SqlRulePublisher;
@@ -246,7 +248,7 @@ publisher.removeScript("s1");
 
 进入 Rule-DB 模式后，以下旧配置**不再适用**，由 `rule-db.*` 接管语义：
 
-- `liteflow.rule-source` —— **互斥**，同时配置会启动报错 `rule-source and rule-db mode cannot be used together`。
+- `liteflow.rule-source` —— **互斥**，同时配置会启动报错 `rule-source and rule-db mode cannot be used together, please remove one of them`。
 - `parseMode`、`enableMonitorFile`、`chainCacheEnabled` / `chainCacheCapacity` —— 不生效，会打 warn 说明语义已由 `rule-db.*` 接管。
 
 ---
@@ -267,7 +269,7 @@ DDL 随 `liteflow-rule-db-sql` 模块提供：[`liteflow-rule-plugin/liteflow-ru
 | `el_data` | TEXT | EL 表达式 |
 | `route_data` | TEXT NULL | 路由 EL（route chain 用） |
 | `version` | BIGINT | 每次发布 +1 |
-| `content_md5` | CHAR(32) | `el_data + route_data` 的 MD5 |
+| `content_md5` | CHAR(32) | `el_data` 的 MD5（**不含** `route_data`，对齐 Publisher 的 `SecureUtil.md5(el)`） |
 | `enable` | TINYINT | 1 启用 / 0 停用 |
 | `gmt_create` / `gmt_modified` | DATETIME | 创建/修改时间 |
 
@@ -278,10 +280,11 @@ DDL 随 `liteflow-rule-db-sql` 模块提供：[`liteflow-rule-plugin/liteflow-ru
 | `application_name` | VARCHAR(64) | 应用隔离维度 |
 | `node_id` | VARCHAR(128) | 脚本节点标识 |
 | `script_name` | VARCHAR(128) NULL | 节点名 |
-| `script_type` | VARCHAR(32) | 对齐 `NodeTypeEnum`：`script` / `boolean_script` / `switch_script` / `for_script` / `while_script` / `break_script` / `iterator_script` |
+| `script_type` | VARCHAR(32) | 对齐 `NodeTypeEnum` 的 4 种脚本类型：`script` / `boolean_script` / `switch_script` / `for_script`（WHILE/ITERATOR 是非脚本节点类型，无 `*_script` 变体） |
 | `script_language` | VARCHAR(32) NULL | `groovy` / `js` / `python` …，为空用全局默认 |
 | `script_data` | TEXT | 脚本源码 |
-| `version` / `content_md5` / `enable` / `gmt_create` / `gmt_modified` | | 同上 |
+| `content_md5` | CHAR(32) | `script_data` 的 MD5（对齐 Publisher 的 `SecureUtil.md5(script_data)`） |
+| `version` / `enable` / `gmt_create` / `gmt_modified` | | 同上 |
 
 **`lf_change_log`** — 主键 `seq` AUTO_INCREMENT，索引 (`application_name`, `seq`)
 
@@ -350,7 +353,7 @@ void  removeScript(String nodeId);
 
 **SQL 直写规范**（一个事务内完成四步）：
 
-1. UPSERT `lf_chain` / `lf_script` 行：`version = version + 1`（行锁下原子自增，**不要**先 SELECT 再 Java +1，并发发布会丢更新），重算并写入 `content_md5`。
+1. UPSERT `lf_chain` / `lf_script` 行：`version = version + 1`（行锁下原子自增，**不要**先 SELECT 再 Java +1，并发发布会丢更新），重算并写入 `content_md5`（**chain = `MD5(el_data)`，不含 route_data；script = `MD5(script_data)`**，必须与 Publisher 的算法一致，否则会产生虚假对账 diff）。
 2. `INSERT INTO lf_change_log (application_name, target_type, target_id, op, version) VALUES (...)`。
 3. 提交事务（回滚要四步一起回滚）。
 4. 删除场景：DELETE 内容行 + INSERT 一条 `op=DELETE` 的 change_log，同样一个事务。
