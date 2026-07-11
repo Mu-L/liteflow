@@ -57,6 +57,7 @@ public class LiteflowPropertyAutoConfiguration {
 		liteflowConfig.setChainCacheEnabled(property.getChainCache().isEnabled());
 		liteflowConfig.setChainCacheCapacity(property.getChainCache().getCapacity());
 		liteflowConfig.setAgent(property.getAgent());
+		liteflowConfig.setRuleDb(property.getRuleDb());
 		return liteflowConfig;
 	}
 

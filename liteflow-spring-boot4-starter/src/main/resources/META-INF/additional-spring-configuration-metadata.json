@@ -516,6 +516,128 @@
       "sourceType": "com.yomahub.liteflow.property.agent.AgentConfig"
     },
     {
+      "name": "liteflow.rule-db.enabled",
+      "type": "java.lang.Boolean",
+      "description": "Whether to enable Rule-DB mode (storage engine as the authoritative source for rules and scripts).",
+      "sourceType": "com.yomahub.liteflow.property.RuleDbConfig",
+      "defaultValue": true
+    },
+    {
+      "name": "liteflow.rule-db.application-name",
+      "type": "java.lang.String",
+      "description": "Application name used to namespace rules in the storage engine (Rule-DB isolation key).",
+      "sourceType": "com.yomahub.liteflow.property.RuleDbConfig"
+    },
+    {
+      "name": "liteflow.rule-db.cache-capacity",
+      "type": "java.lang.Integer",
+      "description": "Capacity of the rule cache (number of chains and scripts).",
+      "sourceType": "com.yomahub.liteflow.property.RuleDbConfig",
+      "defaultValue": 500
+    },
+    {
+      "name": "liteflow.rule-db.seq-poll-seconds",
+      "type": "java.lang.Integer",
+      "description": "Polling interval (seconds) for the incremental change log. Null means use the plugin default (SQL:3 / Redis:30).",
+      "sourceType": "com.yomahub.liteflow.property.RuleDbConfig"
+    },
+    {
+      "name": "liteflow.rule-db.reconcile-seconds",
+      "type": "java.lang.Integer",
+      "description": "Full reconciliation interval (seconds) against the storage engine.",
+      "sourceType": "com.yomahub.liteflow.property.RuleDbConfig",
+      "defaultValue": 60
+    },
+    {
+      "name": "liteflow.rule-db.preload-chain-ids",
+      "type": "java.lang.String",
+      "description": "Comma-separated chain ids to preload on startup.",
+      "sourceType": "com.yomahub.liteflow.property.RuleDbConfig"
+    },
+    {
+      "name": "liteflow.rule-db.fetch-retry-times",
+      "type": "java.lang.Integer",
+      "description": "Retry times when fetching from the storage engine.",
+      "sourceType": "com.yomahub.liteflow.property.RuleDbConfig",
+      "defaultValue": 3
+    },
+    {
+      "name": "liteflow.rule-db.url",
+      "type": "java.lang.String",
+      "description": "SQL JDBC url.",
+      "sourceType": "com.yomahub.liteflow.property.RuleDbConfig"
+    },
+    {
+      "name": "liteflow.rule-db.username",
+      "type": "java.lang.String",
+      "description": "SQL username.",
+      "sourceType": "com.yomahub.liteflow.property.RuleDbConfig"
+    },
+    {
+      "name": "liteflow.rule-db.password",
+      "type": "java.lang.String",
+      "description": "SQL password.",
+      "sourceType": "com.yomahub.liteflow.property.RuleDbConfig"
+    },
+    {
+      "name": "liteflow.rule-db.driver-class-name",
+      "type": "java.lang.String",
+      "description": "SQL driver class name. Blank means inferred from the url.",
+      "sourceType": "com.yomahub.liteflow.property.RuleDbConfig"
+    },
+    {
+      "name": "liteflow.rule-db.datasource-bean-name",
+      "type": "java.lang.String",
+      "description": "Datasource bean name. Blank means auto-discovery by type.",
+      "sourceType": "com.yomahub.liteflow.property.RuleDbConfig"
+    },
+    {
+      "name": "liteflow.rule-db.table-prefix",
+      "type": "java.lang.String",
+      "description": "SQL table prefix.",
+      "sourceType": "com.yomahub.liteflow.property.RuleDbConfig",
+      "defaultValue": "lf_"
+    },
+    {
+      "name": "liteflow.rule-db.auto-init-table",
+      "type": "java.lang.Boolean",
+      "description": "Whether to auto-initialize tables on startup.",
+      "sourceType": "com.yomahub.liteflow.property.RuleDbConfig",
+      "defaultValue": false
+    },
+    {
+      "name": "liteflow.rule-db.address",
+      "type": "java.lang.String",
+      "description": "Redis address(es), comma-separated for cluster or sentinel.",
+      "sourceType": "com.yomahub.liteflow.property.RuleDbConfig"
+    },
+    {
+      "name": "liteflow.rule-db.master-name",
+      "type": "java.lang.String",
+      "description": "Redis master name. Setting this means sentinel mode.",
+      "sourceType": "com.yomahub.liteflow.property.RuleDbConfig"
+    },
+    {
+      "name": "liteflow.rule-db.database",
+      "type": "java.lang.Integer",
+      "description": "Redis database index.",
+      "sourceType": "com.yomahub.liteflow.property.RuleDbConfig",
+      "defaultValue": 0
+    },
+    {
+      "name": "liteflow.rule-db.key-prefix",
+      "type": "java.lang.String",
+      "description": "Redis key prefix.",
+      "sourceType": "com.yomahub.liteflow.property.RuleDbConfig",
+      "defaultValue": "lf"
+    },
+    {
+      "name": "liteflow.rule-db.redisson-bean-name",
+      "type": "java.lang.String",
+      "description": "Redisson bean name. Blank means lookup by type.",
+      "sourceType": "com.yomahub.liteflow.property.RuleDbConfig"
+    },
+    {
       "name": "liteflow.metrics.enabled",
       "type": "java.lang.Boolean",
       "description": "Whether to enable liteflow metrics collection (chain/node timers, counters and registry gauges). Requires a MeterRegistry on the classpath and in the context. Defaults to true.",

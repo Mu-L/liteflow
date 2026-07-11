@@ -104,6 +104,9 @@ public class LiteflowProperty {
 	// agent配置
 	private com.yomahub.liteflow.property.agent.AgentConfig agent;
 
+	// rule-db配置
+	private com.yomahub.liteflow.property.RuleDbConfig ruleDb;
+
 	// 规则缓存配置
 	private ChainCacheProperty chainCache;
 
@@ -378,6 +381,14 @@ public class LiteflowProperty {
 
 	public void setAgent(com.yomahub.liteflow.property.agent.AgentConfig agent) {
 		this.agent = agent;
+	}
+
+	public com.yomahub.liteflow.property.RuleDbConfig getRuleDb() {
+		return ruleDb;
+	}
+
+	public void setRuleDb(com.yomahub.liteflow.property.RuleDbConfig ruleDb) {
+		this.ruleDb = ruleDb;
 	}
 
 	public ChainCacheProperty getChainCache() {

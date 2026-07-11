@@ -111,6 +111,10 @@ public class LiteflowProperty {
 	@NestedConfigurationProperty
 	private com.yomahub.liteflow.property.agent.AgentConfig agent;
 
+	// Rule-DB配置
+	@NestedConfigurationProperty
+	private com.yomahub.liteflow.property.RuleDbConfig ruleDb;
+
 	public static class ChainCacheProperty {
 		// 是否启用规则缓存
 		private Boolean enabled;
@@ -389,5 +393,13 @@ public class LiteflowProperty {
 
 	public void setAgent(com.yomahub.liteflow.property.agent.AgentConfig agent) {
 		this.agent = agent;
+	}
+
+	public com.yomahub.liteflow.property.RuleDbConfig getRuleDb() {
+		return ruleDb;
+	}
+
+	public void setRuleDb(com.yomahub.liteflow.property.RuleDbConfig ruleDb) {
+		this.ruleDb = ruleDb;
 	}
 }
