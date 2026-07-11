@@ -47,6 +47,7 @@
         <module>liteflow-testcase-el-script-javaxpro-springboot</module>
         <module>liteflow-testcase-el-rule-db-core</module>
         <module>liteflow-testcase-el-rule-db-sql-springboot</module>
+        <module>liteflow-testcase-el-rule-db-redis-springboot</module>
     </modules>
 
     <profiles>

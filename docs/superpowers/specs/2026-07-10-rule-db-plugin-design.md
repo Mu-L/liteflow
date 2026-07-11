@@ -145,6 +145,7 @@ lf:{app}:script:{nodeId}    HASH   script / name / type / language / version / m
 lf:{app}:chain-index        HASH   chainId → "version|md5"
 lf:{app}:script-index       HASH   nodeId  → "version|md5|type|language|name"
 lf:{app}:seq                STRING （INCR）
+lf:{app}:changelog          ZSET   score=seq，member = JSON{seq, targetType, targetId, op, version}
 lf:{app}:notify             pub/sub channel，消息 = JSON{seq, targetType, targetId, op, version}
 ```
 
@@ -165,7 +166,7 @@ public interface RulePublisher {
 ```
 
 - **SQL 实现**：单事务内 UPSERT 内容行（`version = version + 1`，重算 md5）+ INSERT change_log。
-- **Redis 实现**：一段 Lua 原子完成 HSET 内容（HINCRBY version）→ HSET index → INCR seq → PUBLISH 通知。
+- **Redis 实现**：一段 Lua 原子完成 HSET 内容 → HSET index → INCR seq → ZADD changelog（score=seq）→ PUBLISH 通知，五步在单脚本内原子提交；changelog ZSet 的 member 与 notify 消息同构（JSON{seq, targetType, targetId, op, version}），既支撑 seq 轮询的 `fetchChangesSince` 区间拉取，也使断档检测（最小 score &gt; since+1）成为可能。
 - 同时文档化等价的 SQL 写法 / Lua 脚本规范，供已有管理后台不依赖 Java 客户端也能按规范写入。
 - **双保险**：对账时 version 相同再比 content_md5，能发现"绕过规范改了内容但没动版本号"的脏写。
 
