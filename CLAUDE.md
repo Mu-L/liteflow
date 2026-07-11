@@ -153,6 +153,9 @@ ls liteflow-*/pom.xml
 - **liteflow-rule-apollo**：Apollo 配置中心
 - **liteflow-rule-redis**：Redis 配置源
 
+#### Rule-DB 模式插件（存储为权威源，`liteflow-rule-plugin/` 下 2 种）
+- **liteflow-rule-db-sql** / **liteflow-rule-db-redis**：与上面 6 个"启动拼 XML"式插件不同，Rule-DB 模式让规则/脚本**真正以 SQL/Redis 为权威源**，JVM 只保留「id→版本戳」常驻索引 + 有界缓存（编译产物/EL/脚本源码按需拉取、淘汰退影子）。通过 core 的 `RuleRepository` SPI（`com.yomahub.liteflow.repository`，实现类经 ServiceLoader 注册）接入，变更经"pub/sub 推送 + 序号轮询 + 周期对账"三条腿收敛，保证多节点最终一致（秒级窗口），且 JVM 内存占用与规则总量解耦。与 `rule-source` 互斥，两个 rule-db 插件不可同时在 classpath。配置命名空间 `liteflow.rule-db.*`（绑定到 `RuleDbConfig`，三 starter 已含 IDE 元数据）。写入走 `SqlRulePublisher` / `RedisRulePublisher`（SQL 单事务、Redis Lua 原子）。一致性语义=最终收敛，非原子切换；v1 仅 SQL/Redis 实现，不支持 Redis Cluster 原子发布。**完整使用指南：`docs/liteflow-rule-db-guide.md`**。
+
 #### 脚本插件（`liteflow-script-plugin/` 下 11 种语言）
 - **liteflow-script-groovy**：Groovy 脚本
 - **liteflow-script-javascript**：Rhino JavaScript（JSR223）
