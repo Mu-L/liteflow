@@ -13,7 +13,7 @@ import java.util.List;
  * 必须提供无参构造器，连接等初始化在首次方法调用时基于 LiteflowConfigGetter.get().getRuleDb() 懒执行。
  *
  * @author Bryan.Zhang
- * @since 2.16.2
+ * @since 2.16.1
  */
 public interface RuleRepository {
 
@@ -34,6 +34,15 @@ public interface RuleRepository {
 
 	/** 可选推送通道（Redis 实现，SQL 空实现） */
 	default void subscribe(RuleChangeListener listener) {
+	}
+
+	/**
+	 * seq 轮询的插件级默认周期（秒），仅在 liteflow.rule-db.seq-poll-seconds 未配置时生效。
+	 * 无推送通道的实现（SQL）轮询是唯一感知手段，默认激进（3s）；
+	 * 有推送通道的实现（Redis）轮询只是丢消息兜底，应覆写为更宽松的值（30s）。
+	 */
+	default int defaultSeqPollSeconds() {
+		return 3;
 	}
 
 	/** 释放连接资源 */

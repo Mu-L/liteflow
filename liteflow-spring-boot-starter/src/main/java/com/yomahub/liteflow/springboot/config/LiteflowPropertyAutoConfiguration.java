@@ -1,12 +1,15 @@
 package com.yomahub.liteflow.springboot.config;
 
+import cn.hutool.core.util.StrUtil;
 import com.yomahub.liteflow.property.LiteflowConfig;
+import com.yomahub.liteflow.property.RuleDbConfig;
 import com.yomahub.liteflow.springboot.LiteflowMonitorProperty;
 import com.yomahub.liteflow.springboot.LiteflowProperty;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.PropertySource;
+import org.springframework.core.env.Environment;
 
 /**
  * LiteflowConfig的装配类 这个装配类主要是把监控器的配置参数类和流程配置参数类作一个合并，转换成统一的配置参数类。
@@ -21,7 +24,8 @@ import org.springframework.context.annotation.PropertySource;
 public class LiteflowPropertyAutoConfiguration {
 
 	@Bean
-	public LiteflowConfig liteflowConfig(LiteflowProperty property, LiteflowMonitorProperty liteflowMonitorProperty) {
+	public LiteflowConfig liteflowConfig(LiteflowProperty property, LiteflowMonitorProperty liteflowMonitorProperty,
+			Environment environment) {
 		LiteflowConfig liteflowConfig = new LiteflowConfig();
 		liteflowConfig.setRuleSource(property.getRuleSource());
 		liteflowConfig.setRuleSourceExtData(property.getRuleSourceExtData());
@@ -57,7 +61,13 @@ public class LiteflowPropertyAutoConfiguration {
 		liteflowConfig.setChainCacheEnabled(property.getChainCache().isEnabled());
 		liteflowConfig.setChainCacheCapacity(property.getChainCache().getCapacity());
 		liteflowConfig.setAgent(property.getAgent());
-		liteflowConfig.setRuleDb(property.getRuleDb());
+		// Rule-DB：application-name 未显式配置时默认取 spring.application.name（多应用共库的隔离维度）；
+		// 零配置姿势（未写任何 liteflow.rule-db.* 时 ruleDb 为 null）也要享受该默认
+		RuleDbConfig ruleDb = property.getRuleDb() == null ? new RuleDbConfig() : property.getRuleDb();
+		if (StrUtil.isBlank(ruleDb.getApplicationName())) {
+			ruleDb.setApplicationName(environment.getProperty("spring.application.name"));
+		}
+		liteflowConfig.setRuleDb(ruleDb);
 		return liteflowConfig;
 	}
 

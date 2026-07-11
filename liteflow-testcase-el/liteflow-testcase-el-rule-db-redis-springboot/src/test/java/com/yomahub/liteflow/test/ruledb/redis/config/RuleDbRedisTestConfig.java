@@ -25,7 +25,7 @@ import javax.annotation.PostConstruct;
  * <p>address 指向 embedded-redis 监听的 16379（非默认端口，避免与开发者本地 redis 冲突）。
  *
  * @author Bryan.Zhang
- * @since 2.16.2
+ * @since 2.16.1
  */
 @Configuration
 public class RuleDbRedisTestConfig {

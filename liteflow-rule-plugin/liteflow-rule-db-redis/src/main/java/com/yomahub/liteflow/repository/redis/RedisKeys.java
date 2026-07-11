@@ -8,7 +8,7 @@ import com.yomahub.liteflow.property.RuleDbConfig;
  * Redis 键名拼装：{prefix}:{app}:xxx。
  *
  * @author Bryan.Zhang
- * @since 2.16.2
+ * @since 2.16.1
  */
 public class RedisKeys {
 

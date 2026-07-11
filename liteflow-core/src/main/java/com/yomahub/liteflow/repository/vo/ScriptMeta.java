@@ -4,7 +4,7 @@ package com.yomahub.liteflow.repository.vo;
  * Rule-DB 模式下 script 的清单元数据（不含脚本内容），用于 {@link RuleManifest}。
  *
  * @author Bryan.Zhang
- * @since 2.16.2
+ * @since 2.16.1
  */
 public class ScriptMeta {
 

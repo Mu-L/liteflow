@@ -250,12 +250,13 @@ Actuator 把端点分成两个**相互独立**的维度：
 
 | 指标 | 类型 | Tags | 含义 |
 |---|---|---|---|
-| `liteflow.chain.executions` | Timer | `chain`, `status`(success/failed) | chain 执行次数、总/平均/最大耗时、成功数、失败数 |
+| `liteflow.chain.executions` | Timer | `chain`, `scope`(main/sub), `status`(success/failed) | chain 执行次数、总/平均/最大耗时、成功数、失败数 |
 | `liteflow.chain.active` | LongTaskTimer | `chain` | 当前在途执行数 + 最长在途耗时（发现卡住/堆积） |
 | `liteflow.chain.errors` | Counter | `chain`, `exception`(异常类 simpleName) | 按异常类型分布的失败数 |
 
 说明：
 - `status` 由 chain 执行结束时 `slot.getException()` 是否为 `null` 判定。
+- `scope` 区分主链与子链：EL 中引用的子链每次执行也会单独计一次，所以某条 chain 的总执行数可能大于业务侧的调用次数。统计"业务调用量"时请筛 `scope=main`。
 - `exception` tag 取异常类的 `getClass().getSimpleName()`，基数有界。
 - 同线程嵌套子链（before A → before B → after B → after A）通过每线程样本栈正确配对；WHEN 并行子链在各自线程，互不影响。
 
@@ -599,10 +600,10 @@ LiteFlow 核心**不做任何统计计算**，只上报原始测量值；聚合�
 
 **单次开销：**
 - **未引入 `liteflow-metrics` 时接近零。** chain 钩子调用本就存在于 `Chain.execute()`；node 新钩子在 `NodeComponent.execute()` 的 `finally` 中只多一次"空列表"判断，不分配、不遍历。
-- **引入后亚微秒级，通常 < 1%。** 每次执行新增一次 `timer.record(...)`（一次按 name+tags 的 `ConcurrentHashMap` 查找 + 几次 `LongAdder.add`，量级约几十到一两百纳秒）、一个小样本对象、每线程栈的一次入/出栈；出错时再有一次 Counter 自增。相对 `NodeComponent.execute()` 本就存在的 `CmpStep`、`StopWatch`、两次 `LOG.info`，以及用户业务逻辑（常含 DB / IO），新增开销可忽略。
+- **引入后亚微秒级，通常 < 1%。** Meter 实例在模块内按 tag 组合缓存（`ConcurrentHashMap`），每次执行只做一次字符串拼 key 的缓存查找 + `timer.record(...)`（几次 `LongAdder.add`，量级约几十纳秒）、一个小样本对象、每线程栈的一次入/出栈；出错时再有一次 Counter 自增。相对 `NodeComponent.execute()` 本就存在的 `CmpStep`、`StopWatch`、两次 `LOG.info`，以及用户业务逻辑（常含 DB / IO），新增开销可忽略。
 
 **真正的风险点是时间序列基数：**
-- 每个 `(chain,status)` / `(node,type,status)` 组合驻留一个小 Meter（几百字节）并导出一条时间序列。
+- 每个 `(chain,scope,status)` / `(node,type,status)` 组合驻留一个小 Meter（几百字节）并导出一条时间序列。
 - 选定的 **chain + node 两级** → 内存 ≈ O(chain 数 + node 数)，几千个量级仅几 MB。
 - 已规避高基数陷阱：未采用"node-in-chain 三级"组合；`exception` tag 只取类 simpleName，基数有界；不含 requestId、完整异常 message 等。
 - 超高吞吐场景下若需进一步压成本，`active`（LongTaskTimer）是最可做成可选 / 移除的一项。

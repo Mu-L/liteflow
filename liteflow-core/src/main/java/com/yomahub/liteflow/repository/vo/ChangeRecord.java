@@ -4,7 +4,7 @@ package com.yomahub.liteflow.repository.vo;
  * Rule-DB 模式变更日志中的一条增量记录，由 {@code RuleRepository.fetchChangesSince(seq)} 返回。
  *
  * @author Bryan.Zhang
- * @since 2.16.2
+ * @since 2.16.1
  */
 public class ChangeRecord {
 

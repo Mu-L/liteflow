@@ -64,7 +64,7 @@ import java.util.List;
  * 必须提供无参构造器，连接等初始化在首次方法调用时基于 LiteflowConfigGetter.get().getRuleDb() 懒执行。
  *
  * @author Bryan.Zhang
- * @since 2.16.2
+ * @since 2.16.1
  */
 public interface RuleRepository {
 
@@ -719,7 +719,7 @@ import java.util.concurrent.atomic.AtomicLong;
  * 有界缓存在 Task 4 补入。
  *
  * @author Bryan.Zhang
- * @since 2.16.2
+ * @since 2.16.1
  */
 public class RuleDbRuntime {
 
@@ -1157,7 +1157,7 @@ import java.util.concurrent.atomic.AtomicInteger;
  * 脚本引用计数归零则 unLoad 并退脚本影子。
  *
  * @author Bryan.Zhang
- * @since 2.16.2
+ * @since 2.16.1
  */
 public class RuleDbCache {
 
@@ -1536,7 +1536,7 @@ import java.util.concurrent.TimeUnit;
  * 变更同步：seq 轮询（兜底/主感知）+ 可选订阅推送 + 周期对账。
  *
  * @author Bryan.Zhang
- * @since 2.16.2
+ * @since 2.16.1
  */
 public class RuleDbSyncManager {
 
@@ -1883,7 +1883,7 @@ import java.sql.SQLException;
  * 否则用 url/username/password 直连。
  *
  * @author Bryan.Zhang
- * @since 2.16.2
+ * @since 2.16.1
  */
 public class SqlConnectionManager {
 
@@ -1984,7 +1984,7 @@ import java.sql.Statement;
  * 表名拼装（前缀可配，字段名固定）+ 建表 DDL。
  *
  * @author Bryan.Zhang
- * @since 2.16.2
+ * @since 2.16.1
  */
 public class SqlDialect {
 
@@ -2139,7 +2139,7 @@ import java.util.List;
  * Rule-DB 的 SQL 权威源实现。
  *
  * @author Bryan.Zhang
- * @since 2.16.2
+ * @since 2.16.1
  */
 public class SqlRuleRepository implements RuleRepository {
 
@@ -2377,7 +2377,7 @@ import java.sql.SQLException;
  * 可独立于 FlowExecutor 使用（管理后台只依赖本 jar）。
  *
  * @author Bryan.Zhang
- * @since 2.16.2
+ * @since 2.16.1
  */
 public class SqlRulePublisher {
 

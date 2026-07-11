@@ -8,7 +8,7 @@ import java.util.List;
  * 由 {@code RuleRepository.fetchManifest()} 返回，供运行时做差异比对与对账。
  *
  * @author Bryan.Zhang
- * @since 2.16.2
+ * @since 2.16.1
  */
 public class RuleManifest {
 

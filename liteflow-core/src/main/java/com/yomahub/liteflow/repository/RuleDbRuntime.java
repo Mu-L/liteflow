@@ -36,7 +36,7 @@ import java.util.concurrent.atomic.AtomicLong;
  * 有界缓存在 Task 4 补入。
  *
  * @author Bryan.Zhang
- * @since 2.16.2
+ * @since 2.16.1
  */
 public class RuleDbRuntime {
 
@@ -52,6 +52,11 @@ public class RuleDbRuntime {
 	private static final Map<String, Long> CHAIN_CACHED_VERSION = new ConcurrentHashMap<>();
 
 	private static final Map<String, Long> SCRIPT_CACHED_VERSION = new ConcurrentHashMap<>();
+
+	/** 缓存态内容的 content_md5：对账时 version 相同再比 md5（双保险，spec §7），发现脏写则失效 */
+	private static final Map<String, String> CHAIN_CACHED_MD5 = new ConcurrentHashMap<>();
+
+	private static final Map<String, String> SCRIPT_CACHED_MD5 = new ConcurrentHashMap<>();
 
 	static final AtomicLong LAST_APPLIED_SEQ = new AtomicLong(0);
 
@@ -182,6 +187,9 @@ public class RuleDbRuntime {
 		chain.setCompiled(false);
 		CHAIN_CACHED_VERSION.put(chainId, record.getVersion());
 		CHAIN_VERSION_INDEX.put(chainId, record.getVersion());
+		if (StrUtil.isNotBlank(record.getMd5())) {
+			CHAIN_CACHED_MD5.put(chainId, record.getMd5());
+		}
 	}
 
 	/**
@@ -208,6 +216,9 @@ public class RuleDbRuntime {
 		node.setLanguage(record.getLanguage());
 		SCRIPT_CACHED_VERSION.put(nodeId, record.getVersion());
 		SCRIPT_VERSION_INDEX.put(nodeId, record.getVersion());
+		if (StrUtil.isNotBlank(record.getMd5())) {
+			SCRIPT_CACHED_MD5.put(nodeId, record.getMd5());
+		}
 	}
 
 	private static ChainRecord fetchChainWithRetry(String chainId) {
@@ -269,15 +280,18 @@ public class RuleDbRuntime {
 
 	static void onChainEvicted(String chainId) {
 		CHAIN_CACHED_VERSION.remove(chainId);
+		CHAIN_CACHED_MD5.remove(chainId);
 	}
 
 	static void onScriptEvicted(String nodeId) {
 		SCRIPT_CACHED_VERSION.remove(nodeId);
+		SCRIPT_CACHED_MD5.remove(nodeId);
 	}
 
 	/** 缓存态失效（Task 5 分级刷新用） */
 	static void invalidateChainCache(String chainId) {
 		CHAIN_CACHED_VERSION.remove(chainId);
+		CHAIN_CACHED_MD5.remove(chainId);
 		Chain chain = FlowBus.getChain(chainId);
 		if (chain != null) {
 			chain.setCompiled(false);
@@ -288,10 +302,33 @@ public class RuleDbRuntime {
 
 	static void invalidateScriptCache(String nodeId) {
 		SCRIPT_CACHED_VERSION.remove(nodeId);
+		SCRIPT_CACHED_MD5.remove(nodeId);
 		Node node = FlowBus.getNode(nodeId);
 		if (node != null) {
 			node.setScript(null);
 			node.setCompiled(false);
+		}
+		// 已编译 chain 的条件树里持有的是克隆 Node（浅拷贝连 isCompiled/instance 一起拷），
+		// 只失效 nodeMap 驻留的那一个时，其余克隆仍是已编译态，在别的 chain 重载执行器产物之前
+		// 会一直跑旧脚本——必须把所有条件树里的同 id 克隆一并失效（对齐 FlowBus.reloadScript 的克隆更新语义）
+		for (Chain chain : FlowBus.getChainMap().values()) {
+			if (CollUtil.isEmpty(chain.getConditionList())) {
+				continue; // 影子/已失效 chain 无条件树
+			}
+			List<Node> nodesInChain;
+			try {
+				nodesInChain = LiteflowMetaOperator.getNodes(chain);
+			} catch (Exception e) {
+				// 树中引用的子链可能刚被失效退影子（conditionList=null），递归收集会 NPE；
+				// 跳过即可——该子链重编时会经 compileScriptNode 拿到新脚本
+				continue;
+			}
+			for (Node n : nodesInChain) {
+				if (nodeId.equals(n.getId())) {
+					n.setScript(null);
+					n.setCompiled(false);
+				}
+			}
 		}
 	}
 
@@ -309,6 +346,7 @@ public class RuleDbRuntime {
 			if (change.getOp() == ChangeRecord.Op.DELETE) {
 				CHAIN_VERSION_INDEX.remove(id);
 				CHAIN_CACHED_VERSION.remove(id);
+				CHAIN_CACHED_MD5.remove(id);
 				FlowBus.removeChain(id);
 			} else {
 				Long cur = CHAIN_VERSION_INDEX.get(id);
@@ -328,12 +366,23 @@ public class RuleDbRuntime {
 			if (change.getOp() == ChangeRecord.Op.DELETE) {
 				SCRIPT_VERSION_INDEX.remove(id);
 				SCRIPT_CACHED_VERSION.remove(id);
+				SCRIPT_CACHED_MD5.remove(id);
 				FlowBus.unloadScriptNode(id);
 			} else {
 				Long cur = SCRIPT_VERSION_INDEX.get(id);
 				// spec §8.5 幂等：缓存版本 ≥ 通知版本则忽略（DELETE 分支不受此限）
 				if (cur != null && version < cur) {
 					return;
+				}
+				if (cur == null) {
+					// 新增脚本：轮询/订阅的 ChangeRecord 不带 type/language 元数据，
+					// 回源取一次注册影子 Node，否则引用它的 chain 在下次全量对账前都编译不过
+					ScriptRecord record = fetchScriptWithRetry(id);
+					if (record == null || !record.isEnable()) {
+						return; // 已被删除/停用：等后续 DELETE 变更或对账处理
+					}
+					registerShadowScript(new ScriptMeta(id, record.getVersion(), record.getMd5(),
+							record.getType(), record.getLanguage(), record.getName()));
 				}
 				SCRIPT_VERSION_INDEX.put(id, version);
 				invalidateScriptCache(id);
@@ -343,8 +392,9 @@ public class RuleDbRuntime {
 
 	/**
 	 * 全量对账：以 manifest 为准修正索引与缓存。
-	 * version 不一致触发 UPSERT（惰性失效）；清单中已消失的条目触发 DELETE；
-	 * 新增 script（索引中无）登记影子。version 相同再比 md5 的兜底交由 SQL/Redis 实现在 fetch 时保证。
+	 * version 不一致触发 UPSERT（惰性失效）；version 相同再比 content_md5（双保险，spec §7），
+	 * 发现"改了内容没动版本号"的脏写同样按 UPSERT 失效；清单中已消失的条目触发 DELETE；
+	 * 新增 script（索引中无）登记影子。
 	 * 由 {@link RuleDbSyncManager#reconcileOnce()} 回调。
 	 */
 	public static void reconcile(RuleManifest manifest) {
@@ -353,7 +403,8 @@ public class RuleDbRuntime {
 			for (ChainMeta cm : manifest.getChains()) {
 				liveChains.add(cm.getChainId());
 				Long cur = CHAIN_VERSION_INDEX.get(cm.getChainId());
-				if (cur == null || cur != cm.getVersion()) {
+				if (cur == null || cur != cm.getVersion()
+						|| md5Mismatch(CHAIN_CACHED_MD5.get(cm.getChainId()), cm.getMd5())) {
 					applyChange(new ChangeRecord(0, ChangeRecord.TargetType.CHAIN,
 							cm.getChainId(), ChangeRecord.Op.UPSERT, cm.getVersion()));
 				}
@@ -375,7 +426,8 @@ public class RuleDbRuntime {
 					// 新增脚本：登记影子 Node + 版本戳
 					SCRIPT_VERSION_INDEX.put(sm.getNodeId(), sm.getVersion());
 					registerShadowScript(sm);
-				} else if (cur != sm.getVersion()) {
+				} else if (cur != sm.getVersion()
+						|| md5Mismatch(SCRIPT_CACHED_MD5.get(sm.getNodeId()), sm.getMd5())) {
 					applyChange(new ChangeRecord(0, ChangeRecord.TargetType.SCRIPT,
 							sm.getNodeId(), ChangeRecord.Op.UPSERT, sm.getVersion()));
 				}
@@ -389,6 +441,11 @@ public class RuleDbRuntime {
 		}
 	}
 
+	/** 双方 md5 都在手才比较；缓存态没有 md5（影子/未回源）时不构成脏写信号 */
+	private static boolean md5Mismatch(String cachedMd5, String manifestMd5) {
+		return StrUtil.isNotBlank(cachedMd5) && StrUtil.isNotBlank(manifestMd5) && !cachedMd5.equals(manifestMd5);
+	}
+
 	public static synchronized void destroy() {
 		RuleDbSyncManager.stop();
 		RuleDbCache.destroy();
@@ -396,6 +453,8 @@ public class RuleDbRuntime {
 		SCRIPT_VERSION_INDEX.clear();
 		CHAIN_CACHED_VERSION.clear();
 		SCRIPT_CACHED_VERSION.clear();
+		CHAIN_CACHED_MD5.clear();
+		SCRIPT_CACHED_MD5.clear();
 		LAST_APPLIED_SEQ.set(0);
 		initialized = false;
 		// 重置 isActive 缓存，使下次 init 重新计算（非 rule-db 应用 destroy 后也不残留过期 true）

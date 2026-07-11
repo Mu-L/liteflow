@@ -29,7 +29,7 @@ import java.util.concurrent.TimeUnit;
  * <p>测试通过直接调用 {@link #pollOnce()} / {@link #reconcileOnce()} 绕过定时，保证确定性。
  *
  * @author Bryan.Zhang
- * @since 2.16.2
+ * @since 2.16.1
  */
 public class RuleDbSyncManager {
 
@@ -74,7 +74,9 @@ public class RuleDbSyncManager {
 		if (cfg != null && cfg.getSeqPollSeconds() != null) {
 			return cfg.getSeqPollSeconds();
 		}
-		return 3; // 未配置时的通用默认；插件可通过配置覆盖（Redis 建议 30）
+		// 未配置时取插件级默认：SQL 3s（轮询是唯一感知手段）/ Redis 30s（有 pub/sub，轮询仅兜底）
+		RuleRepository repo = RuleRepositoryHolder.get();
+		return repo == null ? 3 : repo.defaultSeqPollSeconds();
 	}
 
 	/**

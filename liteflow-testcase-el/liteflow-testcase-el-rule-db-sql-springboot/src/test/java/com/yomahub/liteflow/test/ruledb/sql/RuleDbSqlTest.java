@@ -23,7 +23,7 @@ import org.springframework.boot.test.context.SpringBootTest;
  * （本仓库未配置 failsafe，{@code *IT} 不会被 surefire 收集）。
  *
  * @author Bryan.Zhang
- * @since 2.16.2
+ * @since 2.16.1
  */
 @SpringBootTest(classes = RuleDbSqlApplication.class)
 public class RuleDbSqlTest {
@@ -49,6 +49,20 @@ public class RuleDbSqlTest {
 		LiteflowResponse r2 = flowExecutor.execute2Resp("chainA", "arg");
 		Assertions.assertTrue(r2.isSuccess());
 		Assertions.assertEquals("b==>a", r2.getExecuteStepStr());
+	}
+
+	@Test
+	public void testRemoveChainConvergesToNotFound() {
+		SqlRulePublisher publisher = new SqlRulePublisher();
+		publisher.publishChain("delChain", "THEN(a, b)");
+		RuleDbSyncManager.reconcileOnce();
+		Assertions.assertTrue(flowExecutor.execute2Resp("delChain", "arg").isSuccess());
+
+		publisher.removeChain("delChain");
+		RuleDbSyncManager.pollOnce();
+
+		LiteflowResponse r = flowExecutor.execute2Resp("delChain", "arg");
+		Assertions.assertFalse(r.isSuccess(), "removed chain must not execute after convergence");
 	}
 
 	@Test

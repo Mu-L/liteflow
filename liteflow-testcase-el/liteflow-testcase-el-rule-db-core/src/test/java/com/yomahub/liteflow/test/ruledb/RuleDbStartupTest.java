@@ -1,5 +1,6 @@
 package com.yomahub.liteflow.test.ruledb;
 
+import com.yomahub.liteflow.core.FlowExecutor;
 import com.yomahub.liteflow.enums.NodeTypeEnum;
 import com.yomahub.liteflow.flow.FlowBus;
 import com.yomahub.liteflow.flow.element.Chain;
@@ -34,5 +35,21 @@ public class RuleDbStartupTest extends BaseRuleDbTest {
         // 未发生任何内容回源
         Assertions.assertEquals(0, InMemoryRuleRepository.FETCH_CHAIN_COUNT.get());
         Assertions.assertEquals(0, InMemoryRuleRepository.FETCH_SCRIPT_COUNT.get());
+    }
+
+    @Test
+    public void testEnabledFalseEscapeHatch() {
+        InMemoryRuleRepository.putChain("chain1", "THEN(a, b)");
+        registerCommonCmp();
+
+        // 逃生开关：classpath 有实现但 enabled=false → 完全不走 Rule-DB 路径
+        RuleDbConfig cfg = new RuleDbConfig();
+        cfg.setEnabled(false);
+        FlowExecutor executor = buildExecutor(cfg);
+
+        Assertions.assertEquals(0, InMemoryRuleRepository.FETCH_MANIFEST_COUNT.get(),
+                "disabled rule-db must not touch the repository");
+        Assertions.assertFalse(FlowBus.containChain("chain1"));
+        Assertions.assertFalse(executor.execute2Resp("chain1", "arg").isSuccess());
     }
 }

@@ -122,7 +122,7 @@ import com.yomahub.liteflow.property.RuleDbConfig;
  * Redis 键名拼装：{prefix}:{app}:xxx。
  *
  * @author Bryan.Zhang
- * @since 2.16.2
+ * @since 2.16.1
  */
 public class RedisKeys {
 
@@ -191,7 +191,7 @@ import org.redisson.config.Config;
  * 否则用 address（+ master-name）自动识别 single/sentinel/cluster 自建。
  *
  * @author Bryan.Zhang
- * @since 2.16.2
+ * @since 2.16.1
  */
 public class RedisConnectionManager {
 
@@ -343,7 +343,7 @@ import com.yomahub.liteflow.repository.vo.ChangeRecord;
  * ChangeRecord ↔ JSON。字段：seq/targetType/targetId/op/version。
  *
  * @author Bryan.Zhang
- * @since 2.16.2
+ * @since 2.16.1
  */
 public class ChangeCodec {
 
@@ -393,7 +393,7 @@ import java.util.Map;
  * Rule-DB 的 Redis 权威源实现。
  *
  * @author Bryan.Zhang
- * @since 2.16.2
+ * @since 2.16.1
  */
 public class RedisRuleRepository implements RuleRepository {
 
@@ -660,7 +660,7 @@ import java.util.List;
  * 可独立于 FlowExecutor 使用。
  *
  * @author Bryan.Zhang
- * @since 2.16.2
+ * @since 2.16.1
  */
 public class RedisRulePublisher {
 

@@ -11,7 +11,7 @@ import java.util.ServiceLoader;
  * {@link RuleRepository} 实现，结果缓存至 {@link #reset()} 被调用。
  *
  * @author Bryan.Zhang
- * @since 2.16.2
+ * @since 2.16.1
  */
 public class RuleRepositoryHolder {
 

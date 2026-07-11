@@ -11,7 +11,7 @@ import com.yomahub.liteflow.repository.vo.ChangeRecord;
  * 与 {@link ChangeRecord} 字段名逐一对应；枚举按名序列化，无需额外注解。
  *
  * @author Bryan.Zhang
- * @since 2.16.2
+ * @since 2.16.1
  */
 public class ChangeCodec {
 

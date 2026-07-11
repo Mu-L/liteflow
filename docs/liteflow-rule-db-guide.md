@@ -9,7 +9,7 @@ LiteFlow 的 Rule-DB 模式让规则和脚本**真正以 SQL 数据库 / Redis �
 
 读完上手篇你应该能：引入一个依赖 → 写三行（或零行）配置 → 用 `XxxRulePublisher.publishChain(...)` 发布一条规则 → 像平时一样 `flowExecutor.execute2Resp(...)` 执行它。
 
-> 本能力由 `liteflow-rule-db-sql`、`liteflow-rule-db-redis` 两个全新插件模块提供，随 `2.16.2` 发布。这两个插件是**全新模块**，与原有的 `liteflow-rule-sql` / `liteflow-rule-redis` 等 6 个「启动拼 XML」式插件**完全独立、互不干扰**——旧的不会改动一行，新模式是纯增量。
+> 本能力由 `liteflow-rule-db-sql`、`liteflow-rule-db-redis` 两个全新插件模块提供，随 `2.16.1` 发布。这两个插件是**全新模块**，与原有的 `liteflow-rule-sql` / `liteflow-rule-redis` 等 6 个「启动拼 XML」式插件**完全独立、互不干扰**——旧的不会改动一行，新模式是纯增量。
 
 ---
 
@@ -47,12 +47,12 @@ Rule-DB 模式把这两件事一次性解决：
 <dependency>
     <groupId>com.yomahub</groupId>
     <artifactId>liteflow-spring-boot-starter</artifactId>
-    <version>2.16.2</version>
+    <version>2.16.1</version>
 </dependency>
 <dependency>
     <groupId>com.yomahub</groupId>
     <artifactId>liteflow-rule-db-sql</artifactId>
-    <version>2.16.2</version>
+    <version>2.16.1</version>
 </dependency>
 <!-- 数据库驱动用户自带，例如 MySQL -->
 <dependency>
@@ -100,7 +100,8 @@ long version = publisher.publishChain("orderChain",
         "THEN(a, b, IF(c, d, e))");
 System.out.println("发布成功，当前版本: " + version);
 
-// 发布脚本节点（先 publish chain，再 publish 它引用的脚本）
+// 发布脚本节点。若 chain 引用脚本，建议【先发脚本、再发引用它的 chain】——
+// 反过来的话，别的节点可能在两次发布之间的收敛窗口内拉到新 chain 却找不到脚本，编译瞬时失败
 import com.yomahub.liteflow.repository.vo.ScriptRecord;
 ScriptRecord script = new ScriptRecord();
 script.setNodeId("s1");
@@ -113,6 +114,8 @@ publisher.publishScript(script);
 publisher.removeChain("orderChain");
 publisher.removeScript("s1");
 ```
+
+> **EL 里的 `a`、`b`、`c` 是什么？** 是你应用里已注册的普通 Java 组件（继承 `NodeComponent` 的 `@LiteflowComponent`/`@Component` bean）。Rule-DB 只纳管 **EL 和脚本**，Java 组件照旧写在应用代码里、随应用部署——发布的 EL 引用了不存在的组件，执行时会报编译错误。
 
 每次 `publish*` 都在一个**单事务**里原子完成：UPSERT 内容行（`version = version + 1`，重算 md5）+ INSERT 变更日志。返回值就是新的版本号。
 
@@ -140,12 +143,12 @@ public void run() {
 <dependency>
     <groupId>com.yomahub</groupId>
     <artifactId>liteflow-spring-boot-starter</artifactId>
-    <version>2.16.2</version>
+    <version>2.16.1</version>
 </dependency>
 <dependency>
     <groupId>com.yomahub</groupId>
     <artifactId>liteflow-rule-db-redis</artifactId>
-    <version>2.16.2</version>
+    <version>2.16.1</version>
 </dependency>
 ```
 
@@ -213,7 +216,7 @@ publisher.removeScript("s1");
 | 配置项 | 默认 | 说明 |
 |---|---|---|
 | `liteflow.rule-db.enabled` | `true` | 引入依赖即激活；这是逃生开关，设 `false` 则退回非 Rule-DB 行为。 |
-| `liteflow.rule-db.application-name` | Spring 应用取 `spring.application.name` | 多应用共库的隔离维度。同一套库里不同 `application-name` 的规则互不可见。非 Spring 环境必填，否则回落为 `default`。 |
+| `liteflow.rule-db.application-name` | Spring Boot 应用自动取 `spring.application.name` | 多应用共库的隔离维度。同一套库里不同 `application-name` 的规则互不可见。非 Spring / Solon 环境或未配 `spring.application.name` 时回落为 `default`——**多应用共库时务必保证各应用取值不同**，否则会互相读写对方的规则。 |
 | `liteflow.rule-db.cache-capacity` | `500` | 有界缓存容量（按 chain 条数计）。超出按 LRU 淘汰，淘汰的 chain 退回影子状态，其引用的脚本引用计数减一。 |
 | `liteflow.rule-db.seq-poll-seconds` | SQL 默认 `3` / Redis 默认 `30` | 变更序号轮询周期。Redis 有 pub/sub 推送，这个轮询只是丢消息兜底，所以默认更宽松；SQL 没有推送通道，全靠它，所以默认更激进。 |
 | `liteflow.rule-db.reconcile-seconds` | `60` | 清单对账周期，全量 diff 索引与缓存。无论 pub/sub 还是轮询都丢了的极端情况下，这个周期是收敛的最终保证。 |
@@ -238,18 +241,18 @@ publisher.removeScript("s1");
 |---|---|---|
 | `liteflow.rule-db.address` | — | 单机/哨兵/集群统一入口，多地址逗号分隔（如 `redis://h1:6379,redis://h2:6379`）。 |
 | `liteflow.rule-db.master-name` | — | **配置即哨兵模式**；不配则按地址数自动推断单机/集群。 |
+| `liteflow.rule-db.username` | — | Redis 6+ ACL 用户名，可空（配合 `address` 使用；单机/哨兵/集群均生效）。 |
+| `liteflow.rule-db.password` | — | Redis 口令，可空（配合 `address` 使用）。 |
 | `liteflow.rule-db.database` | `0` | Redis 逻辑库。 |
 | `liteflow.rule-db.key-prefix` | `lf` | 键前缀。规则落在 `{prefix}:{app}:...` 下。 |
-| `liteflow.rule-db.redisson-bean-name` | 自动查找 | 容器有 `RedissonClient` bean 时复用，不必再配 `address`。 |
-
-> **Redis 用户名/口令**：v1 走 Redisson 客户端，认证信息在容器注入的 `RedissonClient` 上配置；未注入 bean、用 `address` 起步的场景，如需鉴权请通过容器 bean 提供。
+| `liteflow.rule-db.redisson-bean-name` | 自动查找 | 容器有 `RedissonClient` bean 时复用，不必再配 `address`；此时鉴权在该 bean 上配置。 |
 
 ### 与旧配置的关系
 
 进入 Rule-DB 模式后，以下旧配置**不再适用**，由 `rule-db.*` 接管语义：
 
 - `liteflow.rule-source` —— **互斥**，同时配置会启动报错 `rule-source and rule-db mode cannot be used together, please remove one of them`。
-- `parseMode`、`enableMonitorFile`、`chainCacheEnabled` / `chainCacheCapacity` —— 不生效，会打 warn 说明语义已由 `rule-db.*` 接管。
+- `parseMode`、`enableMonitorFile`、`chainCacheEnabled` / `chainCacheCapacity` —— Rule-DB 路径不读取这些配置（解析时机、热重载、缓存语义均由 `rule-db.*` 接管），配置了也没有效果，建议从配置文件里删掉以免误导后人。
 
 ---
 
@@ -316,6 +319,14 @@ DDL 随 `liteflow-rule-db-sql` 模块提供：[`liteflow-rule-plugin/liteflow-ru
 
 两个 index HASH 是有意设计的：清单/对账一次 `HGETALL` 就能拿到全部 id + 版本，不必扫描内容键。`changelog` ZSet 和 `notify` channel 的消息体**同构**，这样 `fetchChangesSince(seq)` 既能从 ZSet 按分数区间拉增量，也能让 pub/sub 推送直接复用同样的 ChangeRecord 反序列化。
 
+> **changelog 需要运维定期裁剪。** `changelog` ZSet 每次发布都会 `ZADD` 一条且框架不会自动收缩，长期高频发布会持续占用内存。建议运维定期执行（如保留最近 7 天或最近 N 条）：
+>
+> ```
+> ZREMRANGEBYSCORE lf:{app}:changelog 0 {要清理到的seq}
+> ```
+>
+> 裁剪不影响正确性：节点发现自己的位点低于 ZSet 中最小 seq（断档）时，会自动触发一次全量对账（与 SQL 的 `change_log` 清理同一套自愈机制）。
+
 ---
 
 ## 6. 发布协议与写入规范
@@ -337,6 +348,8 @@ void  removeScript(String nodeId);
 - `publishChain` / `publishScript` 返回新版本号；语义是 UPSERT（已有则 `version = version + 1` 并重算 md5，新则插入 `version = 1`）。
 - `removeChain` / `removeScript` 删除内容并写一条 `op=DELETE` 的变更日志。
 - `ScriptRecord` 字段：`nodeId` / `script` / `name`(可空) / `type` / `language`(可空) / `version` / `md5` / `enable`。发布时框架自算 md5，`version` 由存储层自增。
+
+> **停用（enable=0）怎么做？** v1 的 Publisher **没有** `enableChain/enableScript` API（留作后续）。如需临时停用而不删除，可直写存储把 `enable` 置 0（SQL：`UPDATE lf_chain SET enable=0 WHERE ...`；Redis：`HSET {prefix}:{app}:chain:{id} enable 0`）。注意直改 enable 不会产生变更日志，各节点要等**下个对账周期**（默认最多 60s）才感知；已在缓存中的编译产物在感知前会继续执行。想立即生效，请用 `removeChain`（删除走变更日志，秒级收敛），或停用后再按 [§6.2](#62-绕过-api-直接写库写-redis-的规范不推荐但可做) 规范补一条变更日志。
 
 > **route / namespace 重载（仅 Redis）**：`RedisRulePublisher` 另有一个四参重载 `publishChain(chainId, el, route, namespace)`，可同时写入路由 EL 和命名空间。`SqlRulePublisher` 当前只有双参版本（SQL 表的 `route_data` / `namespace` 列已就位，留作后续）。
 
@@ -390,7 +403,9 @@ Rule-DB 的多节点收敛靠三条独立的机制叠加，任何一条都能把
 - Redis 模式：通知延迟毫秒级，seq 轮询 30s，对账 60s → 最迟 60s 内全集群收敛。
 - SQL 模式：无推送，seq 轮询 3s，对账 60s → 最迟 60s 内全集群收敛（实际多数情况 3s 内）。
 
-版本号单调递增，**不会新旧回跳**：通知到达时若缓存版本 ≥ 通知版本，直接忽略（幂等）。
+版本号单调递增，**不会新旧回跳**：变更通知按版本号做幂等保护，迟到的旧版本通知会被忽略，不会把已收敛的新版打回旧版。
+
+> **只发脚本、不发 chain 也会收敛。** 脚本新版发布后，**所有**引用该脚本的已编译 chain（含多条 chain 共享同一脚本的场景）都会在收敛窗口内切到新脚本，无需重发 chain。这是脚本级变更的常规姿势。
 
 ### 7.3 一致性语义（务必读）
 
@@ -419,8 +434,8 @@ Rule-DB 提供的是**最终一致性、秒级收敛窗口**，**不是**原子�
 ```
 execute2Resp(chainId)
   → FlowBus.getChain(chainId)                      // 本地 map 查找
-  → 已编译且版本戳与索引一致 → 直接执行               // 零远程调用
-  → 否则（影子 / 已失效）→ Chain 上 double-checked locking：
+  → 已编译 → 直接执行                                // 零远程调用
+  → 否则（影子 / 收到变更后被失效）→ Chain 上 double-checked locking：
        repository.fetchChain(chainId)              // 一次远程读，带 fetch-retry-times 重试
        → LiteFlowChainELBuilder 构建条件树
        → 写入缓存，登记引用的脚本节点（引用计数 +1）
@@ -429,7 +444,7 @@ execute2Resp(chainId)
        per-node double-check → fetchScript → loadScript → 缓存产物
 ```
 
-缓存命中的唯一新增开销是一次 volatile 版本比对，与原有执行路径性能基本无差。
+一致性由**失效驱动**而非读时校验：热路径不逐次比对版本，变更同步（推送/轮询/对账）到达时把对应缓存态置为失效，下次执行走懒加载分支。因此缓存命中的执行路径与原有模式性能基本无差。
 
 ### 8.3 调优建议
 
@@ -450,13 +465,13 @@ execute2Resp(chainId)
 
 | 故障场景 | 行为 |
 |---|---|
-| **存储不可用，缓存命中** | 照常执行，完全不受影响。**这是核心可用性属性**——存储挂了不影响已缓存链路跑。 |
-| **存储不可用，缓存未命中** | fetch 按 `fetch-retry-times`（默认 3）重试，仍失败抛 `ChainLoadException`（区别于 `ChainNotFoundException`——前者是「规则存在但取不回来」，后者是「规则不存在」）。 |
-| **pub/sub 断线**（仅 Redis） | 自动重连，重连成功后强制触发一次全量对账，堵住断线窗口。 |
+| **存储不可用，缓存命中** | 照常执行，完全不受影响。**这是核心可用性属性**——存储挂了不影响已缓存链路跑。（隐含前提：故障期间没有针对该 chain 的变更被应用；一旦变更把缓存态失效，就落入下一行「未命中」的语义。） |
+| **存储不可用，缓存未命中** | fetch 按 `fetch-retry-times`（默认 3）重试，仍失败抛 `ChainLoadException`（区别于 `ChainNotFoundException`——前者是「规则存在但取不回来」，后者是「规则不存在」）。存储恢复后下次执行自动回源，无需干预。 |
+| **pub/sub 断线**（仅 Redis） | Redisson 自动重连。断线窗口内丢失的推送由 seq 轮询（≤`seq-poll-seconds`）和周期对账（≤`reconcile-seconds`）兜底补齐。 |
 | **change_log 被清理导致 seq 断档** | `fetchChangesSince` 抛 `SeqGapException` → 自动触发全量对账。 |
-| **fetch 到 enable=false 或行不存在** | 从索引移除，后续执行报 chain 不存在。 |
-| **后台刷新失败** | 旧版继续服务 + 标记 stale，下个对账周期重试。变更推送路径的故障不影响线上执行。 |
-| **SQL 缺表且未开 `auto-init-table`** | 启动报错，错误信息内含完整可复制执行的 DDL。 |
+| **fetch 到 enable=false 或行不存在** | 本次执行抛 `ChainLoadException`；下个对账周期该条目从索引移除，之后执行报 chain 不存在（`ChainNotFoundException` 语义）。 |
+| **变更已感知但回源新版失败** | v1 是惰性失效（见 [§8.4](#84-v1-实现注记惰性失效)）：变更到达即失效缓存态，之后每次执行都重试回源，成功前该 chain 执行失败（`ChainLoadException`）。**发布动作本身有小概率把可用的旧版换成暂不可用**——请避开存储抖动窗口发布。 |
+| **SQL 缺表且未开 `auto-init-table`** | 首次访问存储时报 `ConfigErrorException`，错误信息内含完整可复制执行的 DDL。 |
 
 一句话：**缓存是可用性下限**——只要热点规则在缓存里，存储再怎么抖动，业务照跑。
 
@@ -483,4 +498,4 @@ execute2Resp(chainId)
 
 6. **并发首发同一个 id（两个 publisher 同时 INSERT 新行）是 best-effort。** UPDATE 已有行是行锁下原子自增，并发安全；但「两条 publish 几乎同时到达、都是 INSERT 新行」的竞态，v1 是尽力而为——推荐用「单运营/单管理后台」写入，避免并发首发同一 id。
 
-7. **手动 build 的 chain 与本模式共存。** 通过 `LiteFlowChainELBuilder` 手动 build 的 chain 以手动 build 为准（Reconciler 只管理来源于清单的条目，不会把手写 chain 当成「存储中不存在」而删掉），启动时会打 warn 说明。
+7. **手动 build 的 chain 可以与本模式共存，但 id 不要与存储中的 chain 撞车。** 通过 `LiteFlowChainELBuilder` 手动 build、且 id **不在**存储清单中的 chain 不受 Rule-DB 干预（对账只管理来源于清单的条目，不会把手写 chain 当成「存储中不存在」而删掉）。但如果手动 build 的 id 与存储中的 chain **相同**，懒加载/失效路径会用存储内容**覆盖**手动 build 的版本——撞车时以存储为准。请保证两边 id 集合不相交。

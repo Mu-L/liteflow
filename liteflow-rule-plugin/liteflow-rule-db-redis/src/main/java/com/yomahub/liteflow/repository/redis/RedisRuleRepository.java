@@ -34,7 +34,7 @@ import java.util.Map;
  * <p>所有 RMap/RScoredSortedSet/RTopic/RBucket 均使用 {@link StringCodec}，使值以 String 形式返回。
  *
  * @author Bryan.Zhang
- * @since 2.16.2
+ * @since 2.16.1
  */
 public class RedisRuleRepository implements RuleRepository {
 
@@ -144,6 +144,12 @@ public class RedisRuleRepository implements RuleRepository {
 	@Override
 	public void close() {
 		connectionManager.shutdown();
+	}
+
+	/** Redis 有 pub/sub 推送，seq 轮询只是丢消息兜底，默认放宽到 30s */
+	@Override
+	public int defaultSeqPollSeconds() {
+		return 30;
 	}
 
 	/** 读取整个 HASH 为 {@code Map<String, String>}；显式类型见证避免链式调用退化为 {@code Map<Object,Object>}。 */

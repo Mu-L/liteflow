@@ -4,7 +4,7 @@ package com.yomahub.liteflow.property;
  * Rule-DB 模式统一配置（liteflow.rule-db.*），SQL/Redis 字段取并集，插件各取所需
  *
  * @author Bryan.Zhang
- * @since 2.16.2
+ * @since 2.16.1
  */
 public class RuleDbConfig {
 

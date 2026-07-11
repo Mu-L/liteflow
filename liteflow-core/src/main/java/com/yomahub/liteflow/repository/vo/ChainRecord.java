@@ -4,7 +4,7 @@ package com.yomahub.liteflow.repository.vo;
  * Rule-DB 模式下按 id 回源取到的 chain 完整记录（含 EL 内容）。
  *
  * @author Bryan.Zhang
- * @since 2.16.2
+ * @since 2.16.1
  */
 public class ChainRecord {
 

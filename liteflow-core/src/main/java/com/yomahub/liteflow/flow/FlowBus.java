@@ -422,8 +422,10 @@ public class FlowBus {
 	public static boolean removeChain(String chainId) {
 		if (containChain(chainId)) {
 			Chain removedChain = chainMap.remove(chainId);
-			// 移除 elMd5 对应的 chainId
-			elMd5Map.remove(removedChain.getElMd5());
+			// 移除 elMd5 对应的 chainId；影子 chain（rule-db 模式下 EL 从未加载）没有 elMd5
+			if (removedChain.getElMd5() != null) {
+				elMd5Map.remove(removedChain.getElMd5());
+			}
 			return true;
 		}
 		else {

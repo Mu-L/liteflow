@@ -18,7 +18,7 @@ import java.util.List;
  * Rule-DB 的 SQL 权威源实现。
  *
  * @author Bryan.Zhang
- * @since 2.16.2
+ * @since 2.16.1
  */
 public class SqlRuleRepository implements RuleRepository {
 
@@ -60,6 +60,9 @@ public class SqlRuleRepository implements RuleRepository {
 			} catch (SQLException e) {
 				throw new RuntimeException("auto init rule-db tables failed: " + e.getMessage(), e);
 			}
+		} else {
+			// 未开自动建表：显式探测三张表，缺表时报错并附完整 DDL，而非让后续查询抛裸 SQLException
+			dialect.checkTablesExist(c);
 		}
 		tableChecked = true;
 	}

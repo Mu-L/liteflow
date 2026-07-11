@@ -62,4 +62,35 @@ public class RuleDbEvictionTest extends BaseRuleDbTest {
 		// cs2 仍驻留，sx2 引用计数为 1
 		Assertions.assertEquals(1, RuleDbCache.scriptRefCount("sx2"));
 	}
+
+	@Test
+	public void testSharedScriptRefCountAcrossChains() {
+		// 两个 chain 共享脚本 sh1：单个 chain 被淘汰只 -1，共享脚本不 unload；全部淘汰才归零 unload
+		InMemoryRuleRepository.putChain("csA", "THEN(a, sh1)");
+		InMemoryRuleRepository.putChain("csB", "THEN(b, sh1)");
+		InMemoryRuleRepository.putChain("csC", "THEN(c)");
+		InMemoryRuleRepository.putScript("sh1", "defaultContext.setData(\"sh1\", true);", "script", "groovy");
+		registerCommonCmp();
+		RuleDbConfig cfg = new RuleDbConfig();
+		cfg.setCacheCapacity(1);
+		FlowExecutor executor = buildExecutor(cfg);
+
+		executor.execute2Resp("csA", "arg");
+		Assertions.assertEquals(1, RuleDbCache.scriptRefCount("sh1"));
+
+		// csB 驻留淘汰 csA：共享脚本 -1 后仍有引用，保持已加载
+		executor.execute2Resp("csB", "arg");
+		RuleDbCache.cleanUp();
+		Assertions.assertEquals(1, RuleDbCache.scriptRefCount("sh1"));
+		Assertions.assertNotNull(FlowBus.getNode("sh1").getScript(), "shared script must stay loaded");
+
+		// csC 驻留淘汰 csB：引用归零，脚本 unload 退影子
+		executor.execute2Resp("csC", "arg");
+		RuleDbCache.cleanUp();
+		Assertions.assertEquals(0, RuleDbCache.scriptRefCount("sh1"));
+		Assertions.assertNull(FlowBus.getNode("sh1").getScript(), "unreferenced script should be unloaded");
+
+		// 重新执行 csA：重载 chain + 脚本，功能不受影响
+		Assertions.assertTrue(executor.execute2Resp("csA", "arg").isSuccess());
+	}
 }

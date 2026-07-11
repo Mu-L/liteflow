@@ -27,12 +27,13 @@ public class InMemoryRuleRepository implements RuleRepository {
     public static final AtomicLong SEQ = new AtomicLong(0);
     public static final AtomicInteger FETCH_CHAIN_COUNT = new AtomicInteger(0);
     public static final AtomicInteger FETCH_SCRIPT_COUNT = new AtomicInteger(0);
+    public static final AtomicInteger FETCH_MANIFEST_COUNT = new AtomicInteger(0);
     public static volatile boolean DOWN = false;
     public static volatile long MIN_SEQ = 0;
 
     public static void reset() {
         CHAINS.clear(); SCRIPTS.clear(); CHANGES.clear();
-        SEQ.set(0); FETCH_CHAIN_COUNT.set(0); FETCH_SCRIPT_COUNT.set(0);
+        SEQ.set(0); FETCH_CHAIN_COUNT.set(0); FETCH_SCRIPT_COUNT.set(0); FETCH_MANIFEST_COUNT.set(0);
         DOWN = false; MIN_SEQ = 0;
     }
 
@@ -44,6 +45,16 @@ public class InMemoryRuleRepository implements RuleRepository {
         r.setChainId(chainId); r.setEl(el); r.setVersion(version);
         r.setMd5(SecureUtil.md5(el)); r.setEnable(true);
         CHAINS.put(chainId, r);
+    }
+
+    public static void putChain(String chainId, String el, String namespace) {
+        putChain(chainId, el);
+        CHAINS.get(chainId).setNamespace(namespace);
+    }
+
+    /** 直接把行置为停用（不记变更），模拟运营台直改 enable=0 */
+    public static void disableChain(String chainId) {
+        CHAINS.get(chainId).setEnable(false);
     }
 
     public static void putScript(String nodeId, String script, String type, String language) {
@@ -68,11 +79,35 @@ public class InMemoryRuleRepository implements RuleRepository {
                 nodeId, ChangeRecord.Op.UPSERT, SCRIPTS.get(nodeId).getVersion()));
     }
 
+    /** 脏写：改内容并重算 md5，但版本号不动（模拟自算 md5 却忘了 version+1 的管理后台） */
+    public static void dirtyWriteChainSameVersion(String chainId, String el) {
+        ChainRecord old = CHAINS.get(chainId);
+        ChainRecord r = new ChainRecord();
+        r.setChainId(chainId); r.setEl(el); r.setVersion(old.getVersion());
+        r.setMd5(SecureUtil.md5(el)); r.setEnable(true);
+        CHAINS.put(chainId, r);
+    }
+
+    public static void dirtyWriteScriptSameVersion(String nodeId, String script) {
+        ScriptRecord old = SCRIPTS.get(nodeId);
+        ScriptRecord r = new ScriptRecord();
+        r.setNodeId(nodeId); r.setScript(script); r.setType(old.getType()); r.setLanguage(old.getLanguage());
+        r.setVersion(old.getVersion()); r.setMd5(SecureUtil.md5(script)); r.setEnable(true);
+        SCRIPTS.put(nodeId, r);
+    }
+
     public static void deleteChain(String chainId) {
         ChainRecord old = CHAINS.remove(chainId);
         long version = old == null ? 0 : old.getVersion();
         CHANGES.add(new ChangeRecord(SEQ.incrementAndGet(), ChangeRecord.TargetType.CHAIN,
                 chainId, ChangeRecord.Op.DELETE, version));
+    }
+
+    public static void deleteScript(String nodeId) {
+        ScriptRecord old = SCRIPTS.remove(nodeId);
+        long version = old == null ? 0 : old.getVersion();
+        CHANGES.add(new ChangeRecord(SEQ.incrementAndGet(), ChangeRecord.TargetType.SCRIPT,
+                nodeId, ChangeRecord.Op.DELETE, version));
     }
 
     private void checkDown() {
@@ -83,6 +118,8 @@ public class InMemoryRuleRepository implements RuleRepository {
 
     @Override
     public RuleManifest fetchManifest() {
+        // 先计数再判宕机：计数语义为"尝试次数"，供重试次数断言
+        FETCH_MANIFEST_COUNT.incrementAndGet();
         checkDown();
         RuleManifest m = new RuleManifest();
         List<ChainMeta> chains = new ArrayList<>();
@@ -104,15 +141,16 @@ public class InMemoryRuleRepository implements RuleRepository {
 
     @Override
     public ChainRecord fetchChain(String chainId) {
-        checkDown();
+        // 先计数再判宕机：计数语义为"尝试次数"，供重试次数断言
         FETCH_CHAIN_COUNT.incrementAndGet();
+        checkDown();
         return CHAINS.get(chainId);
     }
 
     @Override
     public ScriptRecord fetchScript(String nodeId) {
-        checkDown();
         FETCH_SCRIPT_COUNT.incrementAndGet();
+        checkDown();
         return SCRIPTS.get(nodeId);
     }
 

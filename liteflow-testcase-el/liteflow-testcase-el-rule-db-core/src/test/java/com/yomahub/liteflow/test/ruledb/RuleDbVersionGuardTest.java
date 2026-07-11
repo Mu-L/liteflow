@@ -38,6 +38,9 @@ public class RuleDbVersionGuardTest extends BaseRuleDbTest {
 	public void testScriptUpsertVersionDoesNotRegress() {
 		buildExecutor(new RuleDbConfig());
 
+		// 新脚本的 UPSERT 会回源注册影子（ChangeRecord 不带元数据），故脚本须真实存在于存储
+		InMemoryRuleRepository.putScript("Y", "defaultContext.setData(\"y\", true);", "script", "groovy");
+
 		// UPSERT script Y version 4
 		RuleDbRuntime.applyChange(new ChangeRecord(1, ChangeRecord.TargetType.SCRIPT, "Y", ChangeRecord.Op.UPSERT, 4));
 		Assertions.assertEquals(Long.valueOf(4L), RuleDbRuntime.scriptVersionIndex().get("Y"));

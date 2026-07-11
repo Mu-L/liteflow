@@ -15,7 +15,7 @@ import java.sql.SQLException;
  * 可独立于 FlowExecutor 使用（管理后台只依赖本 jar）。
  *
  * @author Bryan.Zhang
- * @since 2.16.2
+ * @since 2.16.1
  */
 public class SqlRulePublisher {
 

@@ -9,7 +9,7 @@ import java.util.List;
  * Redis 等支持发布订阅的实现可在变更发生时回调，避免轮询。
  *
  * @author Bryan.Zhang
- * @since 2.16.2
+ * @since 2.16.1
  */
 public interface RuleChangeListener {
 

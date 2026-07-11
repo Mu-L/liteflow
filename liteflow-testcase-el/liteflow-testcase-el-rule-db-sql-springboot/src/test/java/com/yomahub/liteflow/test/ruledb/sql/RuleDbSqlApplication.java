@@ -11,7 +11,7 @@ import org.springframework.boot.autoconfigure.SpringBootApplication;
  * 默认扫描本包及其子包（cmp）。
  *
  * @author Bryan.Zhang
- * @since 2.16.2
+ * @since 2.16.1
  */
 @SpringBootApplication
 public class RuleDbSqlApplication {

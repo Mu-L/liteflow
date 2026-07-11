@@ -16,7 +16,7 @@ import java.sql.SQLException;
  * 否则用 url/username/password 直连。
  *
  * @author Bryan.Zhang
- * @since 2.16.2
+ * @since 2.16.1
  */
 public class SqlConnectionManager {
 

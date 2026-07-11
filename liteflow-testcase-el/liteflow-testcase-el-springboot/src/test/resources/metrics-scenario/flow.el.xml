@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE flow PUBLIC  "liteflow" "liteflow.dtd">
+<flow>
+    <chain name="okChain">
+        THEN(a, g);
+    </chain>
+    <chain name="errChain">
+        THEN(a, e);
+    </chain>
+    <chain name="catchChain">
+        CATCH( THEN(a, f) ).DO(b);
+    </chain>
+    <chain name="subChain">
+        THEN(b);
+    </chain>
+    <chain name="mainChain">
+        THEN(a, subChain);
+    </chain>
+</flow>

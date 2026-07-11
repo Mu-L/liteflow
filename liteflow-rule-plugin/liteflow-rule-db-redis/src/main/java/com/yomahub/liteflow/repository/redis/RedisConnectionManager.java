@@ -17,7 +17,7 @@ import org.redisson.config.SingleServerConfig;
  * 否则用 address（+ master-name）自动识别 single/sentinel/cluster 自建。
  *
  * @author Bryan.Zhang
- * @since 2.16.2
+ * @since 2.16.1
  */
 public class RedisConnectionManager {
 
