@@ -8,7 +8,7 @@ import org.springframework.boot.autoconfigure.SpringBootApplication;
 
 /**
  * Rule-DB SQL 插件端到端集成测试启动类。
- * 默认扫描本包及其子包（config / cmp）。
+ * 默认扫描本包及其子包（cmp）。
  *
  * @author Bryan.Zhang
  * @since 2.16.2
