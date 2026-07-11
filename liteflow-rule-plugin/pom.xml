@@ -18,6 +18,7 @@
         <module>liteflow-rule-apollo</module>
         <module>liteflow-rule-redis</module>
         <module>liteflow-rule-db-sql</module>
+        <module>liteflow-rule-db-redis</module>
     </modules>
 
     <artifactId>liteflow-rule-plugin</artifactId>
