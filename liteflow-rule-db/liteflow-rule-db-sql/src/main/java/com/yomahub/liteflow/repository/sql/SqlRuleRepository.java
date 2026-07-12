@@ -170,6 +170,25 @@ public class SqlRuleRepository implements RuleRepository {
 	}
 
 	@Override
+	public ScriptMeta fetchScriptMeta(String nodeId) {
+		String sql = "SELECT node_id, version, content_md5, script_type, script_language, script_name FROM "
+				+ dialect.scriptTable() + " WHERE application_name = ? AND node_id = ? AND enable = 1";
+		try (Connection c = conn(); PreparedStatement ps = c.prepareStatement(sql)) {
+			ps.setString(1, app());
+			ps.setString(2, nodeId);
+			try (ResultSet rs = ps.executeQuery()) {
+				if (!rs.next()) {
+					return null;
+				}
+				return new ScriptMeta(rs.getString(1), rs.getLong(2), rs.getString(3),
+						rs.getString(4), rs.getString(5), rs.getString(6));
+			}
+		} catch (SQLException e) {
+			throw wrap("fetchScriptMeta", e);
+		}
+	}
+
+	@Override
 	public long fetchLatestSeq() {
 		String sql = "SELECT MAX(seq) FROM " + dialect.changeLogTable() + " WHERE application_name = ?";
 		try (Connection c = conn(); PreparedStatement ps = c.prepareStatement(sql)) {
@@ -216,9 +235,27 @@ public class SqlRuleRepository implements RuleRepository {
 					}
 				}
 			}
+			validateSeqContinuity(result, seq);
 			return result;
 		} catch (SQLException e) {
 			throw wrap("fetchChangesSince", e);
+		}
+	}
+
+	private static void validateSeqContinuity(List<ChangeRecord> changes, long currentSeq) {
+		long expected = currentSeq + 1;
+		long previous = Long.MIN_VALUE;
+		for (ChangeRecord change : changes) {
+			long value = change.getSeq();
+			if (value <= currentSeq || value == previous) {
+				continue;
+			}
+			if (value != expected) {
+				throw new SeqGapException("change log internal gap: since=" + currentSeq
+						+ " expected=" + expected + " actual=" + value);
+			}
+			previous = value;
+			expected = value + 1;
 		}
 	}
 

@@ -155,6 +155,17 @@ public class InMemoryRuleRepository implements RuleRepository {
     }
 
     @Override
+    public ScriptMeta fetchScriptMeta(String nodeId) {
+        checkDown();
+        ScriptRecord r = SCRIPTS.get(nodeId);
+        if (r == null || !r.isEnable()) {
+            return null;
+        }
+        return new ScriptMeta(r.getNodeId(), r.getVersion(), r.getMd5(),
+                r.getType(), r.getLanguage(), r.getName());
+    }
+
+    @Override
     public long fetchLatestSeq() {
         checkDown();
         return SEQ.get();

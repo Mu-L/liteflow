@@ -101,6 +101,8 @@ public class RuleDbConvergeTest extends BaseRuleDbTest {
 		InMemoryRuleRepository.publishScript("s9", "defaultContext.setData(\"s9\", true);", "script", "groovy");
 		InMemoryRuleRepository.publishChain("chain1", "THEN(a, s9)");
 		RuleDbSyncManager.pollOnce();
+		Assertions.assertEquals(0, InMemoryRuleRepository.FETCH_SCRIPT_COUNT.get(),
+				"polling a new script must register from metadata without fetching its body");
 
 		LiteflowResponse r = executor.execute2Resp("chain1", "arg");
 		Assertions.assertTrue(r.isSuccess());

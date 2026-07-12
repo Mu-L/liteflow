@@ -3,6 +3,7 @@ package com.yomahub.liteflow.repository;
 import com.yomahub.liteflow.repository.vo.ChainRecord;
 import com.yomahub.liteflow.repository.vo.ChangeRecord;
 import com.yomahub.liteflow.repository.vo.RuleManifest;
+import com.yomahub.liteflow.repository.vo.ScriptMeta;
 import com.yomahub.liteflow.repository.vo.ScriptRecord;
 
 import java.util.List;
@@ -26,6 +27,11 @@ public interface RuleRepository {
 
 	/** 按 id 取脚本内容；不存在返回 null */
 	ScriptRecord fetchScript(String nodeId);
+
+	/** 按 id 取脚本元数据；不读取脚本正文，不存在或停用返回 null */
+	default ScriptMeta fetchScriptMeta(String nodeId) {
+		return null;
+	}
 
 	/** 当前最大变更序号；无变更记录时返回 0 */
 	@Deprecated

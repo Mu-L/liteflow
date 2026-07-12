@@ -211,6 +211,11 @@ public class RuleDbSyncManager {
 			}
 			ordered.sort(Comparator.comparingLong(ChangeRecord::getSeq));
 			long initialCursor = RuleDbRuntime.LAST_APPLIED_SEQ.get();
+			if (!hasContinuousSequence(ordered, initialCursor)) {
+				LOG.warn("rule-db change sequence gap detected after cursor {}, requesting reconcile", initialCursor);
+				requestReconcile(requireRunning);
+				return;
+			}
 			long nextCursor = initialCursor;
 			try {
 				for (ChangeRecord change : ordered) {
@@ -238,6 +243,23 @@ public class RuleDbSyncManager {
 				throw applyFailure;
 			}
 		}
+	}
+
+	private static boolean hasContinuousSequence(List<ChangeRecord> ordered, long initialCursor) {
+		long expected = initialCursor + 1;
+		long previous = Long.MIN_VALUE;
+		for (ChangeRecord change : ordered) {
+			long seq = change.getSeq();
+			if (seq <= initialCursor || seq == previous) {
+				continue;
+			}
+			if (seq != expected) {
+				return false;
+			}
+			previous = seq;
+			expected = seq + 1;
+		}
+		return true;
 	}
 
 	private static String validateChange(ChangeRecord change) {

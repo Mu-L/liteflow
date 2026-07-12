@@ -97,6 +97,9 @@ public class RuleDbRuntime {
 		if (initialized) {
 			return;
 		}
+		// Resolve the legacy SPI first so a classpath containing both integration
+		// styles fails deterministically instead of silently preferring a provider.
+		RuleRepositoryHolder.get();
 		RuleDbProvider provider = RuleDbProviderHolder.get();
 		if (provider == null) {
 			// Transitional RuleRepository implementations remain usable until their
@@ -326,6 +329,20 @@ public class RuleDbRuntime {
 				nodeId, retry, last == null ? StrUtil.EMPTY : last.getMessage()));
 	}
 
+	private static ScriptMeta fetchScriptMetaWithRetry(String nodeId) {
+		int retry = retryTimes();
+		RuntimeException last = null;
+		for (int i = 0; i <= retry; i++) {
+			try {
+				return repositoryForRead().fetchScriptMeta(nodeId);
+			} catch (RuntimeException e) {
+				last = e;
+			}
+		}
+		throw new ChainLoadException(StrUtil.format("fetch script metadata[{}] failed after {} retries: {}",
+				nodeId, retry, last == null ? StrUtil.EMPTY : last.getMessage()));
+	}
+
 	private static int retryTimes() {
 		RuleDbConfig ruleDb = LiteflowConfigGetter.get().getRuleDb();
 		return ruleDb == null || ruleDb.getFetchRetryTimes() == null ? 3 : ruleDb.getFetchRetryTimes();
@@ -468,12 +485,11 @@ public class RuleDbRuntime {
 				if (cur == null) {
 					// 新增脚本：轮询/订阅的 ChangeRecord 不带 type/language 元数据，
 					// 回源取一次注册影子 Node，否则引用它的 chain 在下次全量对账前都编译不过
-					ScriptRecord record = fetchScriptWithRetry(id);
-					if (record == null || !record.isEnable()) {
+					ScriptMeta meta = fetchScriptMetaWithRetry(id);
+					if (meta == null) {
 						return; // 已被删除/停用：等后续 DELETE 变更或对账处理
 					}
-					registerShadowScript(new ScriptMeta(id, record.getVersion(), record.getMd5(),
-							record.getType(), record.getLanguage(), record.getName()));
+					registerShadowScript(meta);
 					if (!SHADOW_SCRIPTS.containsKey(id)) {
 						return;
 					}

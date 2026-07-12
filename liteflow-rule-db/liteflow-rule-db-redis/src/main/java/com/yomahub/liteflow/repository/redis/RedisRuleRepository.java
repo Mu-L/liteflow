@@ -105,6 +105,17 @@ public class RedisRuleRepository implements RuleRepository {
 	}
 
 	@Override
+	public ScriptMeta fetchScriptMeta(String nodeId) {
+		String encoded = readAllMap(redisson(), RedisKeys.scriptIndex()).get(nodeId);
+		if (StrUtil.isBlank(encoded)) {
+			return null;
+		}
+		String[] parts = encoded.split("\\|", -1);
+		return new ScriptMeta(nodeId, parseLong(parts, 0), get(parts, 1),
+				get(parts, 2), get(parts, 3), get(parts, 4));
+	}
+
+	@Override
 	public long fetchLatestSeq() {
 		Object v = redisson().getBucket(RedisKeys.seq(), StringCodec.INSTANCE).get();
 		return v == null ? 0 : parseLong(v.toString());
@@ -127,6 +138,7 @@ public class RedisRuleRepository implements RuleRepository {
 		for (String json : members) {
 			result.add(ChangeCodec.fromJson(json));
 		}
+		validateSeqContinuity(result, seq);
 		return result;
 	}
 
@@ -168,5 +180,22 @@ public class RedisRuleRepository implements RuleRepository {
 	private static String get(String[] parts, int idx) {
 		String v = idx < parts.length ? parts[idx] : null;
 		return StrUtil.isBlank(v) ? null : v;
+	}
+
+	private static void validateSeqContinuity(List<ChangeRecord> changes, long currentSeq) {
+		long expected = currentSeq + 1;
+		long previous = Long.MIN_VALUE;
+		for (ChangeRecord change : changes) {
+			long value = change.getSeq();
+			if (value <= currentSeq || value == previous) {
+				continue;
+			}
+			if (value != expected) {
+				throw new SeqGapException("redis changelog internal gap: since=" + currentSeq
+						+ " expected=" + expected + " actual=" + value);
+			}
+			previous = value;
+			expected = value + 1;
+		}
 	}
 }

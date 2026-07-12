@@ -83,12 +83,34 @@ public class RuleDbChangeSourceTest extends BaseRuleDbTest {
         buildExecutor(new RuleDbConfig());
 
         provider.emitBatch(Arrays.asList(
-                new ChangeRecord(3, ChangeRecord.TargetType.CHAIN,
-                        "ordered", ChangeRecord.Op.UPSERT, 1),
                 new ChangeRecord(2, ChangeRecord.TargetType.CHAIN,
+                        "ordered", ChangeRecord.Op.UPSERT, 1),
+                new ChangeRecord(1, ChangeRecord.TargetType.CHAIN,
                         "ordered", ChangeRecord.Op.UPSERT, 2)));
 
         Assertions.assertEquals(2L, RuleDbRuntime.getChainVersion("ordered"));
+    }
+
+    @Test
+    void internalSequenceGapReconcilesBeforeApplyingAnyChange() {
+        InMemoryRuleDbProvider provider = provider();
+        buildExecutor(new RuleDbConfig());
+        int manifests = InMemoryRuleRepository.FETCH_MANIFEST_COUNT.get();
+
+        provider.emitBatch(Arrays.asList(
+                new ChangeRecord(1, ChangeRecord.TargetType.CHAIN,
+                        "shouldNotApply", ChangeRecord.Op.UPSERT, 1),
+                new ChangeRecord(3, ChangeRecord.TargetType.CHAIN,
+                        "alsoNotApply", ChangeRecord.Op.UPSERT, 1)));
+
+        Assertions.assertEquals(manifests + 1, InMemoryRuleRepository.FETCH_MANIFEST_COUNT.get());
+        Assertions.assertFalse(FlowBus.containChain("shouldNotApply"));
+        Assertions.assertFalse(FlowBus.containChain("alsoNotApply"));
+
+        provider.emit(new ChangeRecord(1, ChangeRecord.TargetType.CHAIN,
+                "afterGap", ChangeRecord.Op.UPSERT, 1));
+        Assertions.assertTrue(FlowBus.containChain("afterGap"),
+                "reconcile after a gap must leave the cursor at the last applied sequence");
     }
 
     @Test
