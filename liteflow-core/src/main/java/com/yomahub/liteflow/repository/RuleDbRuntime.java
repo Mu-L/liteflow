@@ -91,39 +91,83 @@ public class RuleDbRuntime {
 		if (initialized) {
 			return;
 		}
-		RuleRepository repo = RuleRepositoryHolder.get();
-		RuleManifest manifest = repo.fetchManifest();
-
-		// 注册 chain 影子
-		if (CollUtil.isNotEmpty(manifest.getChains())) {
-			for (ChainMeta cm : manifest.getChains()) {
-				CHAIN_VERSION_INDEX.put(cm.getChainId(), cm.getVersion());
-				FlowBus.addChain(cm.getChainId()); // 影子 Chain：只有 id，isCompiled=false
+		RuleDbProvider provider = RuleDbProviderHolder.get();
+		if (provider == null) {
+			// Transitional RuleRepository implementations remain usable until their
+			// unified provider adapters are introduced.
+			RuleRepository legacyRepository = RuleRepositoryHolder.get();
+			if (legacyRepository == null) {
+				return;
 			}
+			provider = legacyProvider(legacyRepository);
 		}
-		// 注册 script 影子
-		if (CollUtil.isNotEmpty(manifest.getScripts())) {
-			for (ScriptMeta sm : manifest.getScripts()) {
-				SCRIPT_VERSION_INDEX.put(sm.getNodeId(), sm.getVersion());
-				registerShadowScript(sm);
+
+		// Open the source before reading the manifest so events observed during the
+		// snapshot are buffered and replayed after its sequence baseline is known.
+		RuleDbSyncManager.open(provider);
+		try {
+			RuleManifest manifest = provider.repository().fetchManifest();
+
+			// 注册 chain 影子
+			if (CollUtil.isNotEmpty(manifest.getChains())) {
+				for (ChainMeta cm : manifest.getChains()) {
+					CHAIN_VERSION_INDEX.put(cm.getChainId(), cm.getVersion());
+					FlowBus.addChain(cm.getChainId()); // 影子 Chain：只有 id，isCompiled=false
+				}
 			}
+			// 注册 script 影子
+			if (CollUtil.isNotEmpty(manifest.getScripts())) {
+				for (ScriptMeta sm : manifest.getScripts()) {
+					SCRIPT_VERSION_INDEX.put(sm.getNodeId(), sm.getVersion());
+					registerShadowScript(sm);
+				}
+			}
+			initialized = true;
+
+			// 初始化有界缓存（容量按 chain 条数）
+			int capacity = 500;
+			RuleDbConfig cacheCfg = LiteflowConfigGetter.get().getRuleDb();
+			if (cacheCfg != null && cacheCfg.getCacheCapacity() != null) {
+				capacity = cacheCfg.getCacheCapacity();
+			}
+			RuleDbCache.init(capacity);
+
+			// Activate buffered changes at the manifest baseline, then reconcile and preload.
+			RuleDbSyncManager.activate(manifest.getLatestSeq());
+			RuleDbSyncManager.startReconcileScheduler();
+			preload();
+		} catch (RuntimeException e) {
+			initialized = false;
+			RuleDbSyncManager.stop();
+			throw e;
 		}
-		LAST_APPLIED_SEQ.set(manifest.getLatestSeq());
-		initialized = true;
+	}
 
-		// 初始化有界缓存（容量按 chain 条数）
-		int capacity = 500;
-		RuleDbConfig cacheCfg = LiteflowConfigGetter.get().getRuleDb();
-		if (cacheCfg != null && cacheCfg.getCacheCapacity() != null) {
-			capacity = cacheCfg.getCacheCapacity();
-		}
-		RuleDbCache.init(capacity);
+	private static RuleDbProvider legacyProvider(RuleRepository repository) {
+		return new RuleDbProvider() {
+			@Override
+			public RuleRepository repository() {
+				return repository;
+			}
 
-		// 启动变更同步（seq 轮询 + 可选订阅 + 周期对账）
-		RuleDbSyncManager.start();
+			@Override
+			public RuleChangeSource changeSource() {
+				return new RuleChangeSource() {
+					@Override
+					public void open(RuleChangeListener listener) {
+					}
 
-		// 预热
-		preload();
+					@Override
+					public void activate(long baselineSeq) {
+					}
+
+					@Override
+					public ChangeSourceHealth health() {
+						return ChangeSourceHealth.starting();
+					}
+				};
+			}
+		};
 	}
 
 	private static void preload() {

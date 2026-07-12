@@ -8,6 +8,8 @@ import com.yomahub.liteflow.property.RuleDbConfig;
 import com.yomahub.liteflow.repository.vo.ChangeRecord;
 import com.yomahub.liteflow.repository.vo.RuleManifest;
 
+import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
@@ -15,18 +17,9 @@ import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.TimeUnit;
 
 /**
- * Rule-DB 变更同步：seq 轮询（主感知/兜底）+ 可选订阅推送 + 周期全量对账。
- *
- * <p>三路收敛：
- * <ul>
- *     <li>seq 轮询：按 {@code seqPollSeconds} 周期调 {@link RuleRepository#fetchChangesSince(long)}
- *     拉增量，逐条 {@link RuleDbRuntime#applyChange} 后推进 {@code LAST_APPLIED_SEQ}。</li>
- *     <li>订阅推送（可选，Redis 实现）：变更发生时立即回调，轮询之外的快速通道，同样推进 seq。</li>
- *     <li>全量对账：按 {@code reconcileSeconds} 周期拉 {@link RuleRepository#fetchManifest()}
- *     做 diff，覆盖丢消息/订阅断线/change_log 清理（seq 断档时立即触发一次）。</li>
- * </ul>
- *
- * <p>测试通过直接调用 {@link #pollOnce()} / {@link #reconcileOnce()} 绕过定时，保证确定性。
+ * Coordinates the two-phase change source lifecycle and manifest reconciliation.
+ * Change source implementations own their backend polling or watch scheduling;
+ * this class only serializes delivery and provides deterministic test hooks.
  *
  * @author Bryan.Zhang
  * @since 2.16.1
@@ -35,88 +28,181 @@ public class RuleDbSyncManager {
 
 	private static final LFLog LOG = LFLoggerManager.getLogger(RuleDbSyncManager.class);
 
-	private static volatile ScheduledExecutorService pollScheduler;
+	private static final Object CALLBACK_MONITOR = new Object();
 
 	private static volatile ScheduledExecutorService reconcileScheduler;
+	private static volatile RuleDbProvider provider;
+	private static volatile RuleRepository repository;
+	private static volatile RuleChangeSource changeSource;
+	private static volatile boolean running;
 
-	/** stop() 后置 false，使订阅回调在 destroy 之后不再重新填充缓存（spec §8.5 幂等） */
-	private static volatile boolean running = false;
+	private static final RuleChangeListener LISTENER = new RuleChangeListener() {
+		@Override
+		public void onChanges(List<ChangeRecord> changes) {
+			applyChanges(changes, true);
+		}
 
-	public static synchronized void start() {
-		running = true;
-		RuleDbConfig cfg = LiteflowConfigGetter.get().getRuleDb();
-		int seqPoll = seqPollSeconds(cfg);
-		int reconcile = cfg == null || cfg.getReconcileSeconds() == null ? 60 : cfg.getReconcileSeconds();
-
-		// 两个单线程调度器各自命名，便于线程转储区分轮询与对账任务
-		pollScheduler = Executors.newSingleThreadScheduledExecutor(daemonFactory("liteflow-rule-db-sync-poll"));
-		reconcileScheduler = Executors.newSingleThreadScheduledExecutor(daemonFactory("liteflow-rule-db-sync-reconcile"));
-		pollScheduler.scheduleWithFixedDelay(RuleDbSyncManager::pollOnceSafe, seqPoll, seqPoll, TimeUnit.SECONDS);
-		reconcileScheduler.scheduleWithFixedDelay(RuleDbSyncManager::reconcileOnceSafe, reconcile, reconcile, TimeUnit.SECONDS);
-
-		// 可选订阅推送（Redis 实现；SQL/InMemory 空实现）；running 标志守卫，stop() 后回调 no-op
-		try {
-			RuleRepositoryHolder.get().subscribe(changes -> {
+		@Override
+		public void onReconcileRequired() {
+			synchronized (CALLBACK_MONITOR) {
 				if (!running) {
 					return;
 				}
-				for (ChangeRecord c : changes) {
-					RuleDbRuntime.applyChange(c);
-					advanceSeq(c.getSeq());
-				}
-			});
-		} catch (Exception e) {
-			LOG.warn("rule-db subscribe failed, fallback to polling: {}", e.getMessage());
+				reconcileNow();
+			}
 		}
-	}
+	};
 
-	private static int seqPollSeconds(RuleDbConfig cfg) {
-		if (cfg != null && cfg.getSeqPollSeconds() != null) {
-			return cfg.getSeqPollSeconds();
-		}
-		// 未配置时取插件级默认：SQL 3s（轮询是唯一感知手段）/ Redis 30s（有 pub/sub，轮询仅兜底）
-		RuleRepository repo = RuleRepositoryHolder.get();
-		return repo == null ? 3 : repo.defaultSeqPollSeconds();
+	private RuleDbSyncManager() {
 	}
 
 	/**
-	 * 单轮 seq 轮询：fetchLatestSeq → fetchChangesSince → 逐条 applyChange + 推进 seq。
-	 * 检测到 seq 断档（SeqGapException）立即转全量对账。
-	 * 公开以便测试直接驱动，绕过定时。
+	 * Opens the provider change source before the initial manifest is fetched.
+	 * Implementations must buffer callbacks until {@link #activate(long)}.
 	 */
-	public static void pollOnce() {
-		RuleRepository repo = RuleRepositoryHolder.get();
-		long last = RuleDbRuntime.LAST_APPLIED_SEQ.get();
-		long latest = repo.fetchLatestSeq();
-		if (latest <= last) {
+	public static synchronized void open(RuleDbProvider nextProvider) {
+		if (running) {
+			if (provider != nextProvider) {
+				throw new IllegalStateException("rule-db sync manager is already open");
+			}
 			return;
 		}
+		if (nextProvider == null) {
+			throw new IllegalArgumentException("rule-db provider must not be null");
+		}
+		RuleRepository nextRepository = nextProvider.repository();
+		RuleChangeSource nextSource = nextProvider.changeSource();
+		if (nextRepository == null) {
+			throw new IllegalArgumentException("rule-db provider repository must not be null");
+		}
+		if (nextSource == null) {
+			nextSource = new NoopChangeSource();
+		}
+		provider = nextProvider;
+		repository = nextRepository;
+		changeSource = nextSource;
+		running = true;
 		try {
-			List<ChangeRecord> changes = repo.fetchChangesSince(last);
-			for (ChangeRecord c : changes) {
-				RuleDbRuntime.applyChange(c);
-				advanceSeq(c.getSeq());
-			}
-		} catch (SeqGapException gap) {
-			LOG.warn("seq gap detected, trigger full reconcile: {}", gap.getMessage());
-			reconcileOnce();
+			nextSource.open(LISTENER);
+		} catch (RuntimeException e) {
+			running = false;
+			provider = null;
+			repository = null;
+			changeSource = null;
+			throw e;
 		}
 	}
 
+	/** Activates the source at the manifest cursor and replays buffered events. */
+	public static void activate(long baselineSeq) {
+		RuleChangeSource source;
+		synchronized (CALLBACK_MONITOR) {
+			if (!running) {
+				return;
+			}
+			advanceSeq(baselineSeq);
+			source = changeSource;
+		}
+		if (source != null) {
+			source.activate(baselineSeq);
+		}
+	}
+
+	/** Starts only the periodic manifest reconciliation task. */
+	public static synchronized void startReconcileScheduler() {
+		if (!running || reconcileScheduler != null) {
+			return;
+		}
+		RuleDbConfig cfg = LiteflowConfigGetter.get().getRuleDb();
+		int reconcile = cfg == null || cfg.getReconcileSeconds() == null
+				? 60 : cfg.getReconcileSeconds();
+		reconcileScheduler = Executors.newSingleThreadScheduledExecutor(
+				daemonFactory("liteflow-rule-db-sync-reconcile"));
+		reconcileScheduler.scheduleWithFixedDelay(RuleDbSyncManager::reconcileOnceSafe,
+				reconcile, reconcile, TimeUnit.SECONDS);
+	}
+
+	/** Transitional alias retained for callers that used the old lifecycle API. */
+	public static void start() {
+		startReconcileScheduler();
+	}
+
 	/**
-	 * 单轮全量对账：fetchManifest → reconcile + 推进 seq。
-	 * 公开以便测试直接驱动，绕过定时。
+	 * Deterministic polling hook. Backend change sources should schedule polling
+	 * themselves; this method retains the transitional repository API for tests.
 	 */
+	public static void pollOnce() {
+		RuleRepository repo = repository;
+		if (repo == null) {
+			repo = RuleRepositoryHolder.get();
+		}
+		if (repo == null) {
+			return;
+		}
+		synchronized (CALLBACK_MONITOR) {
+			if (!running) {
+				return;
+			}
+			long last = RuleDbRuntime.LAST_APPLIED_SEQ.get();
+			long latest = repo.fetchLatestSeq();
+			if (latest <= last) {
+				return;
+			}
+			try {
+				applyChanges(repo.fetchChangesSince(last), true);
+			} catch (SeqGapException gap) {
+				LOG.warn("seq gap detected, trigger full reconcile: {}", gap.getMessage());
+				reconcileNow();
+			}
+		}
+	}
+
+	/** Deterministic full-manifest reconciliation hook. */
 	public static void reconcileOnce() {
-		RuleManifest manifest = RuleRepositoryHolder.get().fetchManifest();
+		synchronized (CALLBACK_MONITOR) {
+			if (!running) {
+				return;
+			}
+			reconcileNow();
+		}
+	}
+
+	private static void reconcileNow() {
+		RuleRepository repo = repository;
+		if (repo == null) {
+			return;
+		}
+		RuleManifest manifest = repo.fetchManifest();
 		RuleDbRuntime.reconcile(manifest);
 		advanceSeq(manifest.getLatestSeq());
 	}
 
-	/**
-	 * 单调推进 LAST_APPLIED_SEQ（CAS 自旋）：仅当新 seq 大于当前值才更新，
-	 * 保证 seq 不回跳（订阅与轮询并发推进也安全）。
-	 */
+	private static void applyChanges(List<ChangeRecord> changes, boolean requireRunning) {
+		if (changes == null || changes.isEmpty()) {
+			return;
+		}
+		synchronized (CALLBACK_MONITOR) {
+			if (requireRunning && !running) {
+				return;
+			}
+			List<ChangeRecord> ordered = new ArrayList<>(changes);
+			ordered.sort(Comparator.comparingLong(ChangeRecord::getSeq));
+			for (ChangeRecord change : ordered) {
+				if (change == null) {
+					continue;
+				}
+				long current = RuleDbRuntime.LAST_APPLIED_SEQ.get();
+				if (change.getSeq() > 0 && change.getSeq() <= current) {
+					continue;
+				}
+				RuleDbRuntime.applyChange(change);
+				if (change.getSeq() > 0) {
+					advanceSeq(change.getSeq());
+				}
+			}
+		}
+	}
+
 	private static void advanceSeq(long seq) {
 		long cur;
 		do {
@@ -127,20 +213,7 @@ public class RuleDbSyncManager {
 		} while (!RuleDbRuntime.LAST_APPLIED_SEQ.compareAndSet(cur, seq));
 	}
 
-	private static void pollOnceSafe() {
-		// destroy 期间正在调度的轮询任务在此 no-op，避免 destroy 清空后又写入缓存
-		if (!running) {
-			return;
-		}
-		try {
-			pollOnce();
-		} catch (Exception e) {
-			LOG.warn("rule-db poll failed: {}", e.getMessage());
-		}
-	}
-
 	private static void reconcileOnceSafe() {
-		// destroy 期间正在调度的对账任务在此 no-op，避免 destroy 清空后又写入缓存
 		if (!running) {
 			return;
 		}
@@ -159,16 +232,37 @@ public class RuleDbSyncManager {
 		};
 	}
 
+	/** Stops scheduling and closes the source; late callbacks become no-ops. */
 	public static synchronized void stop() {
-		// 先置 false：订阅回调若在 shutdown 期间触发则 no-op，避免 destroy 后重新填充缓存
-		running = false;
-		if (pollScheduler != null) {
-			pollScheduler.shutdownNow();
-			pollScheduler = null;
+		RuleChangeSource source;
+		synchronized (CALLBACK_MONITOR) {
+			running = false;
+			source = changeSource;
+			changeSource = null;
+			provider = null;
+			repository = null;
 		}
 		if (reconcileScheduler != null) {
 			reconcileScheduler.shutdownNow();
 			reconcileScheduler = null;
+		}
+		if (source != null) {
+			source.close();
+		}
+	}
+
+	private static final class NoopChangeSource implements RuleChangeSource {
+		@Override
+		public void open(RuleChangeListener listener) {
+		}
+
+		@Override
+		public void activate(long baselineSeq) {
+		}
+
+		@Override
+		public ChangeSourceHealth health() {
+			return ChangeSourceHealth.starting();
 		}
 	}
 }

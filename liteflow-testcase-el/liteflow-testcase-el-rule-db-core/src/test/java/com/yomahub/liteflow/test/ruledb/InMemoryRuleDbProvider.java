@@ -6,6 +6,7 @@ import com.yomahub.liteflow.repository.RuleChangeSource;
 import com.yomahub.liteflow.repository.RuleDbProvider;
 import com.yomahub.liteflow.repository.RuleRepository;
 import com.yomahub.liteflow.repository.vo.ChangeRecord;
+import com.yomahub.liteflow.repository.vo.RuleManifest;
 
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -14,8 +15,20 @@ import java.util.List;
 /** In-memory provider fixture used by the Rule-DB contract tests. */
 public class InMemoryRuleDbProvider implements RuleDbProvider {
 
-    private final InMemoryRuleRepository repository = new InMemoryRuleRepository();
     private final InMemoryChangeSource changeSource = new InMemoryChangeSource();
+    private final InMemoryRuleRepository repository = new InMemoryRuleRepository() {
+        @Override
+        public RuleManifest fetchManifest() {
+            RuleManifest manifest = super.fetchManifest();
+            Runnable callback = afterManifestSnapshot;
+            afterManifestSnapshot = null;
+            if (callback != null) {
+                callback.run();
+            }
+            return manifest;
+        }
+    };
+    private volatile Runnable afterManifestSnapshot;
 
     @Override
     public RuleRepository repository() {
@@ -31,6 +44,34 @@ public class InMemoryRuleDbProvider implements RuleDbProvider {
         changeSource.emit(change);
     }
 
+    public void emitBatch(List<ChangeRecord> changes) {
+        changeSource.emitBatch(changes);
+    }
+
+    public void requestReconcile() {
+        changeSource.requestReconcile();
+    }
+
+    public void emitLate(ChangeRecord change) {
+        changeSource.emitLate(change);
+    }
+
+    public void afterManifestSnapshot(Runnable callback) {
+        this.afterManifestSnapshot = callback;
+    }
+
+    public int getOpenCalls() {
+        return changeSource.getOpenCalls();
+    }
+
+    public int getActivateCalls() {
+        return changeSource.getActivateCalls();
+    }
+
+    public int getCloseCalls() {
+        return changeSource.getCloseCalls();
+    }
+
     @Override
     public void close() {
         changeSource.close();
@@ -40,6 +81,7 @@ public class InMemoryRuleDbProvider implements RuleDbProvider {
         private final Object monitor = new Object();
         private final List<ChangeRecord> buffered = new ArrayList<>();
         private RuleChangeListener listener;
+        private RuleChangeListener lateListener;
         private long baselineSeq;
         private long cursor;
         private boolean activated;
@@ -48,6 +90,7 @@ public class InMemoryRuleDbProvider implements RuleDbProvider {
         private ChangeSourceHealth health = ChangeSourceHealth.starting();
         private int openCalls;
         private int activateCalls;
+        private int closeCalls;
 
         @Override
         public void open(RuleChangeListener listener) {
@@ -56,6 +99,7 @@ public class InMemoryRuleDbProvider implements RuleDbProvider {
                     return;
                 }
                 this.listener = listener;
+                this.lateListener = listener;
                 openCalls++;
             }
         }
@@ -106,6 +150,42 @@ public class InMemoryRuleDbProvider implements RuleDbProvider {
             }
             if (startDelivery) {
                 drain();
+            }
+        }
+
+        /** Deliver a backend-produced batch without imposing source-side ordering. */
+        public void emitBatch(List<ChangeRecord> changes) {
+            RuleChangeListener callback;
+            synchronized (monitor) {
+                if (closed || !activated || listener == null) {
+                    return;
+                }
+                callback = listener;
+            }
+            callback.onChanges(new ArrayList<>(changes));
+        }
+
+        public void requestReconcile() {
+            RuleChangeListener callback;
+            synchronized (monitor) {
+                if (closed || !activated || listener == null) {
+                    return;
+                }
+                callback = listener;
+            }
+            callback.onReconcileRequired();
+        }
+
+        /** Simulate a callback already queued by a backend before close completed. */
+        public void emitLate(ChangeRecord change) {
+            RuleChangeListener callback;
+            synchronized (monitor) {
+                callback = lateListener;
+            }
+            if (callback != null) {
+                List<ChangeRecord> changes = new ArrayList<>(1);
+                changes.add(change);
+                callback.onChanges(changes);
             }
         }
 
@@ -175,6 +255,12 @@ public class InMemoryRuleDbProvider implements RuleDbProvider {
             }
         }
 
+        public int getCloseCalls() {
+            synchronized (monitor) {
+                return closeCalls;
+            }
+        }
+
         @Override
         public void close() {
             synchronized (monitor) {
@@ -182,6 +268,7 @@ public class InMemoryRuleDbProvider implements RuleDbProvider {
                     return;
                 }
                 closed = true;
+                closeCalls++;
                 listener = null;
                 buffered.clear();
                 delivering = false;
