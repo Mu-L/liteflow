@@ -16,7 +16,7 @@
 - **测试只放 `liteflow-testcase-el/` 下**（仓库强制约定），核心代码模块内不放任何测试。
 - **运行测试必须加 `-DskipTests=false`**（根 pom surefire 默认 skip），**禁止改动这个默认值**。
 - 版本占位符 `${revision}`（当前 2.16.1），新模块 pom 不写死版本。
-- 新模块 `liteflow-rule-db-sql` 挂在 `liteflow-rule-plugin` 聚合 pom 下（根 pom 无需改：`liteflow-rule-plugin` 已在两个 compile profile 中）。
+- 新模块 `liteflow-rule-db-sql` 挂在根级独立父模块 `liteflow-rule-db` 的聚合 pom 下；根 pom 的两个 compile profile 均聚合该父模块。
 - 测试模块命名遵循仓库惯例：`liteflow-testcase-el-rule-db-core`（nospring 风格）、`liteflow-testcase-el-rule-db-sql-springboot`。
 - 提交信息中文、conventional-commits 风格，结尾加 `Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>`。
 - 每个 VO/配置类的"标准 getter/setter"指对全部字段生成常规 getter/setter（IDE 生成），不是可省略项。
@@ -1820,21 +1820,22 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 ### Task 7: liteflow-rule-db-sql 插件（SqlRuleRepository + JDBC 连接 + DDL）
 
 **Files:**
-- Create: `liteflow-rule-plugin/liteflow-rule-db-sql/pom.xml`
-- Modify: `liteflow-rule-plugin/pom.xml`（modules 加 `liteflow-rule-db-sql`）
-- Create: `liteflow-rule-plugin/liteflow-rule-db-sql/src/main/java/com/yomahub/liteflow/repository/sql/SqlRuleRepository.java`
+- Create: `liteflow-rule-db/pom.xml`（独立父模块，modules 加 `liteflow-rule-db-sql`）
+- Modify: `pom.xml`（两个 compile profile 聚合 `liteflow-rule-db`）
+- Create: `liteflow-rule-db/liteflow-rule-db-sql/pom.xml`
+- Create: `liteflow-rule-db/liteflow-rule-db-sql/src/main/java/com/yomahub/liteflow/repository/sql/SqlRuleRepository.java`
 - Create: `.../sql/SqlConnectionManager.java`（连接获取：优先容器 DataSource，其次 url 直连）
 - Create: `.../sql/SqlDialect.java`（表名拼装 + DDL 文本 + 建表）
-- Create: `liteflow-rule-plugin/liteflow-rule-db-sql/src/main/resources/META-INF/services/com.yomahub.liteflow.repository.RuleRepository`
-- Create: `liteflow-rule-plugin/liteflow-rule-db-sql/src/main/resources/sql/ddl-mysql.sql` 与 `ddl-h2.sql`
+- Create: `liteflow-rule-db/liteflow-rule-db-sql/src/main/resources/META-INF/services/com.yomahub.liteflow.repository.RuleRepository`
+- Create: `liteflow-rule-db/liteflow-rule-db-sql/src/main/resources/sql/ddl-mysql.sql` 与 `ddl-h2.sql`
 
 **Interfaces:**
 - Consumes: core 的 `RuleRepository` 及 VO、`LiteflowConfigGetter.get().getRuleDb()`。
 - Produces: `SqlRuleRepository`（无参构造，ServiceLoader 装载）；`SqlConnectionManager.getConnection()`；`SqlDialect.chainTable()/scriptTable()/changeLogTable()/createTablesIfAbsent(conn)`。
 
-- [ ] **Step 1: 建插件 pom 并挂到聚合 pom**
+- [ ] **Step 1: 建独立父模块与插件 pom，并挂到根 pom**
 
-`liteflow-rule-plugin/liteflow-rule-db-sql/pom.xml`：
+`liteflow-rule-db/liteflow-rule-db-sql/pom.xml`：
 
 ```xml
 <?xml version="1.0" encoding="UTF-8"?>
@@ -1842,7 +1843,7 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
          xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
          xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
     <parent>
-        <artifactId>liteflow-rule-plugin</artifactId>
+        <artifactId>liteflow-rule-db</artifactId>
         <groupId>com.yomahub</groupId>
         <version>${revision}</version>
         <relativePath>../pom.xml</relativePath>
@@ -1860,7 +1861,7 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 </project>
 ```
 
-`liteflow-rule-plugin/pom.xml` 的 `<modules>` 里在 `liteflow-rule-redis` 后加 `<module>liteflow-rule-db-sql</module>`。
+新建 `liteflow-rule-db/pom.xml` 作为根级独立父模块，在其 `<modules>` 中加入 `<module>liteflow-rule-db-sql</module>`；同时在根 `pom.xml` 的两个 compile profile 中聚合 `<module>liteflow-rule-db</module>`。
 
 - [ ] **Step 2: 写 SqlConnectionManager（容器 DataSource 优先，url 直连兜底）**
 
@@ -2332,13 +2333,13 @@ com.yomahub.liteflow.repository.sql.SqlRuleRepository
 
 - [ ] **Step 5: 编译验证**
 
-Run: `mvn clean package -DskipTests -pl liteflow-rule-plugin/liteflow-rule-db-sql`
+Run: `mvn clean package -DskipTests -pl liteflow-rule-db/liteflow-rule-db-sql`
 Expected: BUILD SUCCESS
 
 - [ ] **Step 6: Commit**
 
 ```bash
-git add liteflow-rule-plugin/pom.xml liteflow-rule-plugin/liteflow-rule-db-sql
+git add pom.xml liteflow-rule-db
 git commit -m "feat(rule-db-sql): SqlRuleRepository + JDBC 连接管理 + DDL
 
 Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
@@ -2684,7 +2685,7 @@ Expected: PASS
 - [ ] **Step 5: Commit**
 
 ```bash
-git add liteflow-rule-plugin/liteflow-rule-db-sql liteflow-testcase-el/pom.xml liteflow-testcase-el/liteflow-testcase-el-rule-db-sql-springboot
+git add liteflow-rule-db/liteflow-rule-db-sql liteflow-testcase-el/pom.xml liteflow-testcase-el/liteflow-testcase-el-rule-db-sql-springboot
 git commit -m "feat(rule-db-sql): SqlRulePublisher + H2 端到端集成测试
 
 Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
@@ -2697,7 +2698,7 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 全部任务完成后运行：
 
 ```bash
-mvn clean package -DskipTests -pl liteflow-core,liteflow-rule-plugin/liteflow-rule-db-sql
+mvn clean package -DskipTests -pl liteflow-core,liteflow-rule-db/liteflow-rule-db-sql
 mvn test -DskipTests=false -pl liteflow-testcase-el/liteflow-testcase-el-rule-db-core,liteflow-testcase-el/liteflow-testcase-el-rule-db-sql-springboot
 ```
 
@@ -2706,4 +2707,3 @@ mvn test -DskipTests=false -pl liteflow-testcase-el/liteflow-testcase-el-rule-db
 **交接给计划 2（redis 插件）与计划 3（starter 绑定 + metadata + 文档）：**
 - 计划 3 必须实现 `liteflow.rule-db.*` → `RuleDbConfig` 的 Spring Boot 2/3/4 与 Solon 绑定，并生成 `additional-spring-configuration-metadata.json`，否则 Task 8 的 properties 驱动方式需用编程式兜底。
 - 计划 2 的 redis 插件复用 core 的全部 runtime，仅需实现 `RedisRuleRepository`（含 `subscribe` 推送）与 `RedisRulePublisher`（Lua 原子发布），测试模块 `liteflow-testcase-el-rule-db-redis-springboot`。
-

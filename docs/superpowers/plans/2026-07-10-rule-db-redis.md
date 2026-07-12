@@ -16,7 +16,7 @@
 - **测试只放 `liteflow-testcase-el/` 下**；核心/插件模块内不放测试。
 - **运行测试必须 `-DskipTests=false`**，禁止改根 pom surefire 默认。
 - 版本用 `${revision}`，不写死。
-- 新模块 `liteflow-rule-db-redis` 挂 `liteflow-rule-plugin` 聚合 pom。
+- 新模块 `liteflow-rule-db-redis` 挂在根级独立父模块 `liteflow-rule-db` 的聚合 pom 下；该父模块已由根 pom 的两个 compile profile 聚合。
 - 提交信息中文、conventional-commits，结尾 `Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>`。
 - Redisson 依赖照 `liteflow-rule-redis/pom.xml` 的坐标与 exclusions 复制（jackson 冲突排除一致）。
 - 每个 VO/类补全标准 getter/setter（IDE 生成），不是可省项。
@@ -45,8 +45,8 @@ lf:{app}:notify             pub/sub channel，消息 = 同上 JSON
 ### Task 1: 模块骨架 + Redisson 连接管理
 
 **Files:**
-- Create: `liteflow-rule-plugin/liteflow-rule-db-redis/pom.xml`
-- Modify: `liteflow-rule-plugin/pom.xml`（modules 加 `liteflow-rule-db-redis`）
+- Create: `liteflow-rule-db/liteflow-rule-db-redis/pom.xml`
+- Modify: `liteflow-rule-db/pom.xml`（modules 加 `liteflow-rule-db-redis`）
 - Create: `.../repository/redis/RedisConnectionManager.java`
 - Create: `.../repository/redis/RedisKeys.java`（键名拼装，前缀+app 可配）
 
@@ -59,7 +59,7 @@ lf:{app}:notify             pub/sub channel，消息 = 同上 JSON
 
 - [ ] **Step 1: 建 pom 并挂聚合**
 
-`liteflow-rule-plugin/liteflow-rule-db-redis/pom.xml`：
+`liteflow-rule-db/liteflow-rule-db-redis/pom.xml`：
 
 ```xml
 <?xml version="1.0" encoding="UTF-8"?>
@@ -67,7 +67,7 @@ lf:{app}:notify             pub/sub channel，消息 = 同上 JSON
          xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
          xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
     <parent>
-        <artifactId>liteflow-rule-plugin</artifactId>
+        <artifactId>liteflow-rule-db</artifactId>
         <groupId>com.yomahub</groupId>
         <version>${revision}</version>
         <relativePath>../pom.xml</relativePath>
@@ -107,7 +107,7 @@ lf:{app}:notify             pub/sub channel，消息 = 同上 JSON
 </project>
 ```
 
-`liteflow-rule-plugin/pom.xml` 的 `<modules>` 在 `liteflow-rule-db-sql` 后加 `<module>liteflow-rule-db-redis</module>`。
+`liteflow-rule-db/pom.xml` 的 `<modules>` 在 `liteflow-rule-db-sql` 后加 `<module>liteflow-rule-db-redis</module>`。
 
 - [ ] **Step 2: 写 RedisKeys**
 
@@ -306,13 +306,13 @@ public class RedisConnectionManager {
 
 - [ ] **Step 4: 编译验证**
 
-Run: `mvn clean package -DskipTests -pl liteflow-rule-plugin/liteflow-rule-db-redis`
+Run: `mvn clean package -DskipTests -pl liteflow-rule-db/liteflow-rule-db-redis`
 Expected: BUILD SUCCESS
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add liteflow-rule-plugin/pom.xml liteflow-rule-plugin/liteflow-rule-db-redis
+git add liteflow-rule-db/pom.xml liteflow-rule-db/liteflow-rule-db-redis
 git commit -m "feat(rule-db-redis): 模块骨架 + Redisson 连接管理（single/sentinel/cluster 自动识别）
 
 Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
@@ -325,7 +325,7 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 **Files:**
 - Create: `.../repository/redis/RedisRuleRepository.java`
 - Create: `.../repository/redis/ChangeCodec.java`（ChangeRecord ↔ JSON）
-- Create: `liteflow-rule-plugin/liteflow-rule-db-redis/src/main/resources/META-INF/services/com.yomahub.liteflow.repository.RuleRepository`
+- Create: `liteflow-rule-db/liteflow-rule-db-redis/src/main/resources/META-INF/services/com.yomahub.liteflow.repository.RuleRepository`
 
 **Interfaces:**
 - Consumes: Task 1 的 `RedisConnectionManager`/`RedisKeys`；core VO 与 SPI。
@@ -530,13 +530,13 @@ com.yomahub.liteflow.repository.redis.RedisRuleRepository
 
 - [ ] **Step 3: 编译验证**
 
-Run: `mvn clean package -DskipTests -pl liteflow-rule-plugin/liteflow-rule-db-redis`
+Run: `mvn clean package -DskipTests -pl liteflow-rule-db/liteflow-rule-db-redis`
 Expected: BUILD SUCCESS
 
 - [ ] **Step 4: Commit**
 
 ```bash
-git add liteflow-rule-plugin/liteflow-rule-db-redis
+git add liteflow-rule-db/liteflow-rule-db-redis
 git commit -m "feat(rule-db-redis): RedisRuleRepository（索引读取+ZSet变更日志+pub/sub订阅）
 
 Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
@@ -548,7 +548,7 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 
 **Files:**
 - Create: `.../repository/redis/RedisRulePublisher.java`
-- Create: `liteflow-rule-plugin/liteflow-rule-db-redis/src/main/resources/lua/publish-chain.lua` 与 `publish-script.lua`、`remove.lua`
+- Create: `liteflow-rule-db/liteflow-rule-db-redis/src/main/resources/lua/publish-chain.lua` 与 `publish-script.lua`、`remove.lua`
 
 **Interfaces:**
 - Consumes: Task 1/2。
@@ -718,13 +718,13 @@ public class RedisRulePublisher {
 
 - [ ] **Step 3: 编译验证**
 
-Run: `mvn clean package -DskipTests -pl liteflow-rule-plugin/liteflow-rule-db-redis`
+Run: `mvn clean package -DskipTests -pl liteflow-rule-db/liteflow-rule-db-redis`
 Expected: BUILD SUCCESS
 
 - [ ] **Step 4: Commit**
 
 ```bash
-git add liteflow-rule-plugin/liteflow-rule-db-redis
+git add liteflow-rule-db/liteflow-rule-db-redis
 git commit -m "feat(rule-db-redis): RedisRulePublisher（Lua 原子发布：内容+索引+seq+changelog+notify）
 
 Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
@@ -913,7 +913,7 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 ## 计划 2 完成校验
 
 ```bash
-mvn clean package -DskipTests -pl liteflow-rule-plugin/liteflow-rule-db-redis
+mvn clean package -DskipTests -pl liteflow-rule-db/liteflow-rule-db-redis
 mvn test -DskipTests=false -pl liteflow-testcase-el/liteflow-testcase-el-rule-db-redis-springboot
 ```
 

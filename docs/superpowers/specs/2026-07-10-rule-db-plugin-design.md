@@ -285,7 +285,7 @@ liteflow.rule-db.address=redis://127.0.0.1:6379
 ## 11. 模块落点与兼容性
 
 ```
-liteflow-rule-plugin/
+liteflow-rule-db/                       独立父模块
   liteflow-rule-db-sql/      SqlRuleRepository + SqlRulePublisher + DDL（依赖 JDBC，驱动由用户提供）
   liteflow-rule-db-redis/    RedisRuleRepository + RedisRulePublisher（依赖 Redisson，Lua 原子发布）
 liteflow-core/
@@ -296,7 +296,7 @@ liteflow-core/
 - 旧 6 个插件、三种 parseMode、全量 XML 路径零改动，新模式纯增量。
 - 普通 Java 组件 / 声明式组件不受影响（本方案只纳管 EL 与脚本）。
 - `LiteFlowChainELBuilder` 手动 build 的 chain 与本模式共存：以手动 build 的为准并打 warn；Reconciler 只管理来源于清单的条目，不会把手动 chain 当作"存储中不存在"而删除。
-- 模块纳入根 pom 两个 compile profile（JDK 8 语法基线，与其他 rule 插件一致），发布走 `release-on-8`。
+- 独立父模块 `liteflow-rule-db` 纳入根 pom 两个 compile profile（JDK 8 语法基线，与其他 rule 插件一致），发布走 `release-on-8`。
 
 ## 12. 测试策略
 

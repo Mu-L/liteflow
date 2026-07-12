@@ -353,7 +353,7 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 在"规则源插件"小节（`liteflow-rule-plugin/` 下 6 种实现）之后，加一段：
 
 ```markdown
-#### Rule-DB 模式插件（存储为权威源，`liteflow-rule-plugin/` 下 2 种）
+#### Rule-DB 模式插件（存储为权威源，根级独立父模块 `liteflow-rule-db/` 下 2 种）
 - **liteflow-rule-db-sql** / **liteflow-rule-db-redis**：与上面 6 个"启动拼 XML"式插件不同，Rule-DB 模式让规则/脚本**真正以 SQL/Redis 为权威源**，JVM 只保留「id→版本戳」常驻索引 + 有界缓存（编译产物/EL/脚本源码按需拉取、淘汰退影子）。通过 core 的 `RuleRepository` SPI（`com.yomahub.liteflow.repository`）接入，变更经"pub/sub 推送 + 序号轮询 + 周期对账"三条腿收敛，保证多节点最终一致（秒级窗口），且 JVM 内存占用与规则总量解耦。与 `rule-source` 互斥，两个插件不可同时在 classpath。配置命名空间 `liteflow.rule-db.*`。**完整使用指南：`docs/liteflow-rule-db-guide.md`**。
 ```
 

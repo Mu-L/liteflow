@@ -9,7 +9,7 @@ LiteFlow 的 Rule-DB 模式让规则和脚本**真正以 SQL 数据库 / Redis �
 
 读完上手篇你应该能：引入一个依赖 → 写三行（或零行）配置 → 用 `XxxRulePublisher.publishChain(...)` 发布一条规则 → 像平时一样 `flowExecutor.execute2Resp(...)` 执行它。
 
-> 本能力由 `liteflow-rule-db-sql`、`liteflow-rule-db-redis` 两个全新插件模块提供，随 `2.16.1` 发布。这两个插件是**全新模块**，与原有的 `liteflow-rule-sql` / `liteflow-rule-redis` 等 6 个「启动拼 XML」式插件**完全独立、互不干扰**——旧的不会改动一行，新模式是纯增量。
+> 本能力由根级独立父模块 `liteflow-rule-db` 聚合的 `liteflow-rule-db-sql`、`liteflow-rule-db-redis` 两个全新插件模块提供，随 `2.16.1` 发布。这两个插件不属于 `liteflow-rule-plugin` 下原有的 `liteflow-rule-sql` / `liteflow-rule-redis` 等 6 个「启动拼 XML」式插件，双方**完全独立、互不干扰**——旧的不会改动一行，新模式是纯增量。
 
 ---
 
@@ -260,7 +260,7 @@ publisher.removeScript("s1");
 
 ### 5.1 SQL 三张表
 
-DDL 随 `liteflow-rule-db-sql` 模块提供：[`liteflow-rule-plugin/liteflow-rule-db-sql/src/main/resources/sql/ddl-mysql.sql`](../liteflow-rule-plugin/liteflow-rule-db-sql/src/main/resources/sql/ddl-mysql.sql)。表名前缀可配（默认 `lf_`），字段名固定。
+DDL 随 `liteflow-rule-db-sql` 模块提供：[`liteflow-rule-db/liteflow-rule-db-sql/src/main/resources/sql/ddl-mysql.sql`](../liteflow-rule-db/liteflow-rule-db-sql/src/main/resources/sql/ddl-mysql.sql)。表名前缀可配（默认 `lf_`），字段名固定。
 
 **`lf_chain`** — 主键 (`application_name`, `chain_id`)
 
@@ -371,7 +371,7 @@ void  removeScript(String nodeId);
 3. 提交事务（回滚要四步一起回滚）。
 4. 删除场景：DELETE 内容行 + INSERT 一条 `op=DELETE` 的 change_log，同样一个事务。
 
-**Redis 直写规范**：必须用一段 Lua 脚本完成 HSET 内容 → HSET index → INCR seq → ZADD changelog → PUBLISH 五步（脚本可参考 [`lua/publish-chain.lua`](../liteflow-rule-plugin/liteflow-rule-db-redis/src/main/resources/lua/publish-chain.lua)），**不能用普通命令拼**——拼出来在多命令之间存在竞态，可能让别的客户端读到「内容已更新但 seq 没推」的中间态。
+**Redis 直写规范**：必须用一段 Lua 脚本完成 HSET 内容 → HSET index → INCR seq → ZADD changelog → PUBLISH 五步（脚本可参考 [`lua/publish-chain.lua`](../liteflow-rule-db/liteflow-rule-db-redis/src/main/resources/lua/publish-chain.lua)），**不能用普通命令拼**——拼出来在多命令之间存在竞态，可能让别的客户端读到「内容已更新但 seq 没推」的中间态。
 
 ### 6.3 content_md5 对账双保险
 
