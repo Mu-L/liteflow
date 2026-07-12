@@ -16,7 +16,7 @@
 - **测试只放 `liteflow-testcase-el/` 下**（仓库强制约定），核心代码模块内不放任何测试。
 - **运行测试必须加 `-DskipTests=false`**（根 pom surefire 默认 skip），**禁止改动这个默认值**。
 - 版本占位符 `${revision}`（当前 2.16.1），新模块 pom 不写死版本。
-- 新模块 `liteflow-rule-db-sql` 挂在根级独立父模块 `liteflow-rule-db` 的聚合 pom 下；根 pom 的两个 compile profile 均聚合该父模块。
+- 新模块 `liteflow-rule-db-sql` 挂在根级独立父模块 `liteflow-rule-db` 的聚合 pom 下；根 pom 的 `compile-8-to-16`、`compile-17+`、`release-on-8` 三个 profile 均聚合该父模块。
 - 测试模块命名遵循仓库惯例：`liteflow-testcase-el-rule-db-core`（nospring 风格）、`liteflow-testcase-el-rule-db-sql-springboot`。
 - 提交信息中文、conventional-commits 风格，结尾加 `Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>`。
 - 每个 VO/配置类的"标准 getter/setter"指对全部字段生成常规 getter/setter（IDE 生成），不是可省略项。
@@ -1821,7 +1821,7 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 
 **Files:**
 - Create: `liteflow-rule-db/pom.xml`（独立父模块，modules 加 `liteflow-rule-db-sql`）
-- Modify: `pom.xml`（两个 compile profile 聚合 `liteflow-rule-db`）
+- Modify: `pom.xml`（`compile-8-to-16`、`compile-17+`、`release-on-8` 三个 profile 聚合 `liteflow-rule-db`）
 - Create: `liteflow-rule-db/liteflow-rule-db-sql/pom.xml`
 - Create: `liteflow-rule-db/liteflow-rule-db-sql/src/main/java/com/yomahub/liteflow/repository/sql/SqlRuleRepository.java`
 - Create: `.../sql/SqlConnectionManager.java`（连接获取：优先容器 DataSource，其次 url 直连）
@@ -1834,6 +1834,30 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 - Produces: `SqlRuleRepository`（无参构造，ServiceLoader 装载）；`SqlConnectionManager.getConnection()`；`SqlDialect.chainTable()/scriptTable()/changeLogTable()/createTablesIfAbsent(conn)`。
 
 - [ ] **Step 1: 建独立父模块与插件 pom，并挂到根 pom**
+
+`liteflow-rule-db/pom.xml`（本计划先只聚合 SQL；Redis 模块由后续计划加入）：
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <parent>
+        <artifactId>liteflow</artifactId>
+        <groupId>com.yomahub</groupId>
+        <version>${revision}</version>
+        <relativePath>../pom.xml</relativePath>
+    </parent>
+    <modelVersion>4.0.0</modelVersion>
+    <packaging>pom</packaging>
+    <modules>
+        <module>liteflow-rule-db-sql</module>
+    </modules>
+
+    <artifactId>liteflow-rule-db</artifactId>
+    <name>${project.artifactId}</name>
+</project>
+```
 
 `liteflow-rule-db/liteflow-rule-db-sql/pom.xml`：
 
@@ -1861,7 +1885,7 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 </project>
 ```
 
-新建 `liteflow-rule-db/pom.xml` 作为根级独立父模块，在其 `<modules>` 中加入 `<module>liteflow-rule-db-sql</module>`；同时在根 `pom.xml` 的两个 compile profile 中聚合 `<module>liteflow-rule-db</module>`。
+同时在根 `pom.xml` 的 `compile-8-to-16`、`compile-17+`、`release-on-8` 三个 profile 中分别加入 `<module>liteflow-rule-db</module>`。本计划不提前聚合尚未创建的 Redis 子模块，后续 Redis 计划再向父 POM 添加 `<module>liteflow-rule-db-redis</module>`。
 
 - [ ] **Step 2: 写 SqlConnectionManager（容器 DataSource 优先，url 直连兜底）**
 
