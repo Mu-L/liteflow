@@ -26,14 +26,17 @@ public class InMemoryRuleRepository implements RuleRepository {
     public static final List<ChangeRecord> CHANGES = new CopyOnWriteArrayList<>();
     public static final AtomicLong SEQ = new AtomicLong(0);
     public static final AtomicInteger FETCH_CHAIN_COUNT = new AtomicInteger(0);
+    public static final AtomicInteger FETCH_CHAIN_META_COUNT = new AtomicInteger(0);
     public static final AtomicInteger FETCH_SCRIPT_COUNT = new AtomicInteger(0);
+    public static final AtomicInteger FETCH_SCRIPT_META_COUNT = new AtomicInteger(0);
     public static final AtomicInteger FETCH_MANIFEST_COUNT = new AtomicInteger(0);
     public static volatile boolean DOWN = false;
     public static volatile long MIN_SEQ = 0;
 
     public static void reset() {
         CHAINS.clear(); SCRIPTS.clear(); CHANGES.clear();
-        SEQ.set(0); FETCH_CHAIN_COUNT.set(0); FETCH_SCRIPT_COUNT.set(0); FETCH_MANIFEST_COUNT.set(0);
+        SEQ.set(0); FETCH_CHAIN_COUNT.set(0); FETCH_CHAIN_META_COUNT.set(0);
+        FETCH_SCRIPT_COUNT.set(0); FETCH_SCRIPT_META_COUNT.set(0); FETCH_MANIFEST_COUNT.set(0);
         DOWN = false; MIN_SEQ = 0;
     }
 
@@ -148,6 +151,17 @@ public class InMemoryRuleRepository implements RuleRepository {
     }
 
     @Override
+    public ChainMeta fetchChainMeta(String chainId) {
+        FETCH_CHAIN_META_COUNT.incrementAndGet();
+        checkDown();
+        ChainRecord r = CHAINS.get(chainId);
+        if (r == null || !r.isEnable()) {
+            return null;
+        }
+        return new ChainMeta(r.getChainId(), r.getVersion(), r.getMd5());
+    }
+
+    @Override
     public ScriptRecord fetchScript(String nodeId) {
         FETCH_SCRIPT_COUNT.incrementAndGet();
         checkDown();
@@ -156,6 +170,7 @@ public class InMemoryRuleRepository implements RuleRepository {
 
     @Override
     public ScriptMeta fetchScriptMeta(String nodeId) {
+        FETCH_SCRIPT_META_COUNT.incrementAndGet();
         checkDown();
         ScriptRecord r = SCRIPTS.get(nodeId);
         if (r == null || !r.isEnable()) {
