@@ -285,7 +285,7 @@ public class FlowBus {
 			NodeComponent cmpInstance = cmpInstanceList.get(0);
 
 			addCompiledNode2Map(node, nodeId, script, language, type, cmpInstance);
-			com.yomahub.liteflow.repository.RuleDbRuntime.recordCompiledScript(nodeId);
+			com.yomahub.liteflow.repository.RuleDbRuntime.recordCompiledScript(node);
         } catch (Exception e) {
 			if (ruleDbActive) {
 				com.yomahub.liteflow.repository.RuleDbRuntime.markScriptLoadFailed(nodeId, e);

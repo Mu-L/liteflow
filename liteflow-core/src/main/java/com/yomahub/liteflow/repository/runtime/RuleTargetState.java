@@ -30,6 +30,9 @@ public final class RuleTargetState {
 	 * newer event means that the change source did not carry content metadata.
 	 */
 	public synchronized boolean updateDesired(long version, String md5) {
+		if (status == RuleTargetStatus.DELETED) {
+			return false;
+		}
 		long current = desiredVersion.get();
 		if (version < current || (version == current && md5 == null)) {
 			return false;
@@ -44,11 +47,15 @@ public final class RuleTargetState {
 		return true;
 	}
 
-	public synchronized void markLoaded(long version, String md5) {
+	public synchronized boolean markLoaded(long version, String md5) {
+		if (!isGenerationCurrent(version, md5)) {
+			return false;
+		}
 		loadedVersion = version;
 		loadedMd5 = md5;
 		status = RuleTargetStatus.LOADING;
 		lastError = null;
+		return true;
 	}
 
 	public synchronized boolean isDesiredLoaded() {
@@ -56,9 +63,9 @@ public final class RuleTargetState {
 				&& (desiredMd5 == null || Objects.equals(loadedMd5, desiredMd5));
 	}
 
-	public synchronized void activateLoaded() {
-		if (loadedVersion == 0) {
-			return;
+	public synchronized boolean activateLoaded() {
+		if (loadedVersion == 0 || !isGenerationCurrent(loadedVersion, loadedMd5)) {
+			return false;
 		}
 		activeVersion.set(loadedVersion);
 		activeMd5 = loadedMd5;
@@ -69,9 +76,13 @@ public final class RuleTargetState {
 		loadedMd5 = null;
 		lastError = null;
 		status = readyOrStale();
+		return true;
 	}
 
-	public synchronized void activate(long version, String md5) {
+	public synchronized boolean activate(long version, String md5) {
+		if (!isGenerationCurrent(version, md5)) {
+			return false;
+		}
 		activeVersion.set(version);
 		activeMd5 = md5;
 		if (desiredVersion.get() == version && desiredMd5 == null) {
@@ -79,17 +90,19 @@ public final class RuleTargetState {
 		}
 		lastError = null;
 		status = readyOrStale();
+		return true;
 	}
 
 	public synchronized void clearActive() {
+		if (status == RuleTargetStatus.DELETED) {
+			return;
+		}
 		activeVersion.set(0);
 		activeMd5 = null;
 		loadedVersion = 0;
 		loadedMd5 = null;
 		lastError = null;
-		if (status != RuleTargetStatus.DELETED) {
-			status = RuleTargetStatus.SHADOW;
-		}
+		status = RuleTargetStatus.SHADOW;
 	}
 
 	public synchronized void markDeleted() {
@@ -98,15 +111,30 @@ public final class RuleTargetState {
 	}
 
 	public synchronized void markLoading() {
+		if (status == RuleTargetStatus.DELETED) {
+			return;
+		}
 		status = RuleTargetStatus.LOADING;
 		lastError = null;
 	}
 
-	public synchronized void markFailed(Throwable error) {
-		if (status != RuleTargetStatus.DELETED) {
-			status = RuleTargetStatus.FAILED;
-			lastError = error;
+	public synchronized boolean markFailed(Throwable error) {
+		if (status == RuleTargetStatus.DELETED) {
+			return false;
 		}
+		status = RuleTargetStatus.FAILED;
+		lastError = error;
+		return true;
+	}
+
+	public synchronized boolean isGenerationCurrent(long version, String md5) {
+		return status != RuleTargetStatus.DELETED
+				&& desiredVersion.get() == version
+				&& (desiredMd5 == null || Objects.equals(desiredMd5, md5));
+	}
+
+	public boolean isDeleted() {
+		return status == RuleTargetStatus.DELETED;
 	}
 
 	private RuleTargetStatus readyOrStale() {

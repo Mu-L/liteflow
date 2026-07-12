@@ -2,6 +2,7 @@ package com.yomahub.liteflow.test.ruledb;
 
 import com.yomahub.liteflow.core.FlowExecutor;
 import com.yomahub.liteflow.flow.FlowBus;
+import com.yomahub.liteflow.flow.element.Chain;
 import com.yomahub.liteflow.flow.element.Node;
 import com.yomahub.liteflow.meta.LiteflowMetaOperator;
 import com.yomahub.liteflow.property.RuleDbConfig;
@@ -163,6 +164,42 @@ public class RuleDbVersionStateTest extends BaseRuleDbTest {
 		Assertions.assertEquals(RuleTargetStatus.DELETED, state.getStatus());
 		Assertions.assertNull(RuleDbRuntime.getChainVersion("chain1"));
 		Assertions.assertFalse(FlowBus.containChain("chain1"));
+	}
+
+	@Test
+	public void testDeletedChainRejectsLateCompiledCallback() {
+		InMemoryRuleRepository.putChain("lateChain", "THEN(a, b)");
+		buildExecutor(new RuleDbConfig());
+		RuleTargetState state = RuleDbRuntime.chainState("lateChain");
+		Chain loadingChain = FlowBus.getChain("lateChain");
+		state.markLoaded(state.getDesiredVersion(), state.getDesiredMd5());
+
+		RuleDbRuntime.applyChange(new ChangeRecord(1, ChangeRecord.TargetType.CHAIN,
+				"lateChain", ChangeRecord.Op.DELETE, state.getDesiredVersion()));
+		FlowBus.getChainMap().put("lateChain", loadingChain);
+		RuleDbRuntime.recordCompiledChain(loadingChain);
+
+		Assertions.assertEquals(RuleTargetStatus.DELETED, state.getStatus());
+		Assertions.assertEquals(0L, state.getActiveVersion());
+		Assertions.assertFalse(FlowBus.containChain("lateChain"));
+	}
+
+	@Test
+	public void testDeletedScriptRejectsLateCompiledCallback() {
+		InMemoryRuleRepository.putScript("lateScript", "defaultContext.setData(\"late\", true);", "script", "groovy");
+		buildExecutor(new RuleDbConfig());
+		RuleTargetState state = RuleDbRuntime.scriptState("lateScript");
+		Node loadingScript = FlowBus.getNode("lateScript");
+		state.markLoaded(state.getDesiredVersion(), state.getDesiredMd5());
+
+		RuleDbRuntime.applyChange(new ChangeRecord(1, ChangeRecord.TargetType.SCRIPT,
+				"lateScript", ChangeRecord.Op.DELETE, state.getDesiredVersion()));
+		FlowBus.getNodeMap().put("lateScript", loadingScript);
+		RuleDbRuntime.recordCompiledScript(loadingScript);
+
+		Assertions.assertEquals(RuleTargetStatus.DELETED, state.getStatus());
+		Assertions.assertEquals(0L, state.getActiveVersion());
+		Assertions.assertFalse(FlowBus.containNode("lateScript"));
 	}
 
 	private FlowExecutor loadAndExecuteVersionOne() {

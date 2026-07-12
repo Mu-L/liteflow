@@ -346,7 +346,7 @@ public class LiteFlowChainELBuilder {
 			fromChain(chain).compileChain();
 			// Rule-DB 模式：编译成功后登记缓存 + 脚本引用计数
 			if (ruleDbActive){
-				com.yomahub.liteflow.repository.RuleDbRuntime.recordCompiledChain(chain.getChainId());
+				com.yomahub.liteflow.repository.RuleDbRuntime.recordCompiledChain(chain);
 			}
 		} catch (RuntimeException e) {
 			if (ruleDbActive) {
