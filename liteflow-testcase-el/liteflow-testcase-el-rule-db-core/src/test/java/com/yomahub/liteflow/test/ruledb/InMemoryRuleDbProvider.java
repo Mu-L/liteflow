@@ -44,6 +44,7 @@ public class InMemoryRuleDbProvider implements RuleDbProvider {
         private long cursor;
         private boolean activated;
         private boolean closed;
+        private boolean delivering;
         private ChangeSourceHealth health = ChangeSourceHealth.starting();
         private int openCalls;
         private int activateCalls;
@@ -61,6 +62,7 @@ public class InMemoryRuleDbProvider implements RuleDbProvider {
 
         @Override
         public void activate(long baselineSeq) {
+            boolean startDelivery;
             synchronized (monitor) {
                 if (closed) {
                     return;
@@ -70,14 +72,21 @@ public class InMemoryRuleDbProvider implements RuleDbProvider {
                 this.activated = true;
                 activateCalls++;
                 buffered.sort(Comparator.comparingLong(ChangeRecord::getSeq));
-                List<ChangeRecord> replay = drainAfterBaseline();
-                deliver(replay);
-                health = ChangeSourceHealth.up(cursor);
+                drainAfterBaseline();
+                health = health.successful(cursor);
+                startDelivery = !buffered.isEmpty() && !delivering;
+                if (startDelivery) {
+                    delivering = true;
+                }
+            }
+            if (startDelivery) {
+                drain();
             }
         }
 
         /** Emit a change, buffering it until activation. */
         public void emit(ChangeRecord change) {
+            boolean startDelivery;
             synchronized (monitor) {
                 if (closed) {
                     return;
@@ -89,41 +98,60 @@ public class InMemoryRuleDbProvider implements RuleDbProvider {
                 if (change.getSeq() <= baselineSeq) {
                     return;
                 }
-                deliver(singleton(change));
-            }
-        }
-
-        private List<ChangeRecord> drainAfterBaseline() {
-            List<ChangeRecord> replay = new ArrayList<>();
-            for (ChangeRecord change : buffered) {
-                if (change.getSeq() > baselineSeq) {
-                    replay.add(change);
+                buffered.add(change);
+                startDelivery = !delivering;
+                if (startDelivery) {
+                    delivering = true;
                 }
             }
-            buffered.clear();
-            return replay;
-        }
-
-        private List<ChangeRecord> singleton(ChangeRecord change) {
-            List<ChangeRecord> one = new ArrayList<>(1);
-            one.add(change);
-            return one;
-        }
-
-        private void deliver(List<ChangeRecord> changes) {
-            if (changes.isEmpty() || listener == null || closed) {
-                return;
+            if (startDelivery) {
+                drain();
             }
-            List<ChangeRecord> deliverable = new ArrayList<>();
-            for (ChangeRecord change : changes) {
-                if (change.getSeq() > baselineSeq) {
-                    deliverable.add(change);
+        }
+
+        private void drainAfterBaseline() {
+            buffered.removeIf(change -> change.getSeq() <= baselineSeq);
+        }
+
+        private void drain() {
+            while (true) {
+                List<ChangeRecord> batch;
+                RuleChangeListener callback;
+                synchronized (monitor) {
+                    if (closed || listener == null) {
+                        buffered.clear();
+                        delivering = false;
+                        return;
+                    }
+                    if (buffered.isEmpty()) {
+                        delivering = false;
+                        return;
+                    }
+                    buffered.sort(Comparator.comparingLong(ChangeRecord::getSeq));
+                    batch = new ArrayList<>(buffered);
+                    buffered.clear();
+                    callback = listener;
                 }
-            }
-            if (!deliverable.isEmpty()) {
-                listener.onChanges(deliverable);
-                for (ChangeRecord change : deliverable) {
-                    cursor = Math.max(cursor, change.getSeq());
+
+                try {
+                    callback.onChanges(batch);
+                } catch (RuntimeException e) {
+                    synchronized (monitor) {
+                        if (!closed) {
+                            health = health.degraded(e.getMessage());
+                        }
+                        delivering = false;
+                    }
+                    throw e;
+                }
+
+                synchronized (monitor) {
+                    if (!closed) {
+                        for (ChangeRecord change : batch) {
+                            cursor = Math.max(cursor, change.getSeq());
+                        }
+                        health = health.successful(cursor);
+                    }
                 }
             }
         }
@@ -156,7 +184,8 @@ public class InMemoryRuleDbProvider implements RuleDbProvider {
                 closed = true;
                 listener = null;
                 buffered.clear();
-                health = ChangeSourceHealth.down(null, cursor);
+                delivering = false;
+                health = health.down(null);
             }
         }
     }

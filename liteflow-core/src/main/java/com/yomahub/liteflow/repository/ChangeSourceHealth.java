@@ -30,12 +30,48 @@ public final class ChangeSourceHealth {
 		return new ChangeSourceHealth(Status.UP, null, System.currentTimeMillis(), cursor);
 	}
 
+	/**
+	 * Creates a degraded snapshot with no previously successful delivery.
+	 * Prefer {@link #degraded(String)} when transitioning an existing snapshot.
+	 */
 	public static ChangeSourceHealth degraded(String error, long cursor) {
 		return new ChangeSourceHealth(Status.DEGRADED, error, 0L, cursor);
 	}
 
+	/**
+	 * Creates a down snapshot with no previously successful delivery.
+	 * Prefer {@link #down(String)} when transitioning an existing snapshot.
+	 */
 	public static ChangeSourceHealth down(String error, long cursor) {
 		return new ChangeSourceHealth(Status.DOWN, error, 0L, cursor);
+	}
+
+	public ChangeSourceHealth successful(long newCursor) {
+		return new ChangeSourceHealth(Status.UP, null, System.currentTimeMillis(), newCursor);
+	}
+
+	/**
+	 * Returns a status transition while retaining the last successful timestamp
+	 * and cursor from this snapshot.
+	 */
+	public ChangeSourceHealth withStatus(Status newStatus, String error) {
+		return new ChangeSourceHealth(newStatus, error, lastSuccessTime, cursor);
+	}
+
+	public ChangeSourceHealth degraded(String error) {
+		return withStatus(Status.DEGRADED, error);
+	}
+
+	public static ChangeSourceHealth degraded(ChangeSourceHealth previous, String error) {
+		return (previous == null ? starting() : previous).degraded(error);
+	}
+
+	public ChangeSourceHealth down(String error) {
+		return withStatus(Status.DOWN, error);
+	}
+
+	public static ChangeSourceHealth down(ChangeSourceHealth previous, String error) {
+		return (previous == null ? starting() : previous).down(error);
 	}
 
 	public Status getStatus() {

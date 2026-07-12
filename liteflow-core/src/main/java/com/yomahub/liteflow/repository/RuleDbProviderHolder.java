@@ -21,18 +21,33 @@ public final class RuleDbProviderHolder {
 			for (RuleDbProvider candidate : ServiceLoader.load(RuleDbProvider.class)) {
 				providers.add(candidate);
 			}
-			if (providers.size() > 1) {
-				List<String> names = new ArrayList<>();
-				for (RuleDbProvider candidate : providers) {
-					names.add(candidate.getClass().getName());
-				}
-				throw new ConfigErrorException("multiple RuleDbProvider implementations found: "
-						+ String.join(", ", names));
-			}
-			provider = providers.isEmpty() ? null : providers.get(0);
+			provider = resolve(providers);
 			resolved = true;
 		}
 		return provider;
+	}
+
+	/**
+	 * Resolves the provider set. Package-private so the core contract tests can
+	 * exercise resolution without replacing the application class loader.
+	 */
+	static RuleDbProvider resolve(Iterable<RuleDbProvider> candidates) {
+		RuleDbProvider resolvedProvider = null;
+		List<String> names = new ArrayList<>();
+		for (RuleDbProvider candidate : candidates) {
+			if (candidate == null) {
+				continue;
+			}
+			names.add(candidate.getClass().getName());
+			if (resolvedProvider == null) {
+				resolvedProvider = candidate;
+			}
+		}
+		if (names.size() > 1) {
+			throw new ConfigErrorException("multiple RuleDbProvider implementations found: "
+					+ String.join(", ", names));
+		}
+		return resolvedProvider;
 	}
 
 	public static RuleRepository repository() {

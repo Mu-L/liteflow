@@ -5,8 +5,10 @@ import com.yomahub.liteflow.repository.vo.ChangeRecord;
 import java.util.List;
 
 /**
- * Rule-DB 模式推送通道监听器，由 {@link RuleRepository#subscribe(RuleChangeListener)} 注册。
- * Redis 等支持发布订阅的实现可在变更发生时回调，避免轮询。
+ * Rule-DB change listener registered through
+ * {@link RuleChangeSource#open(RuleChangeListener)}. Implementations may
+ * deliver changes in batches and request a manifest reconciliation through
+ * {@link #onReconcileRequired()} when an incremental stream cannot be trusted.
  *
  * @author Bryan.Zhang
  * @since 2.16.1
