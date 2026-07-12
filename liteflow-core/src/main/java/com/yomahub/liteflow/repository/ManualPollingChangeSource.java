@@ -5,7 +5,7 @@ package com.yomahub.liteflow.repository;
  * legacy adapters. Backend implementations may instead schedule polling
  * internally and leave {@link RuleDbSyncManager#pollOnce()} as a no-op.
  */
-public interface ManualPollingChangeSource {
+interface ManualPollingChangeSource {
 
 	void pollOnce();
 }

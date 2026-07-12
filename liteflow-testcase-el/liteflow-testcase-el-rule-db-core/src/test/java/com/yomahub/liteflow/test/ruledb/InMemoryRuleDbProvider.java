@@ -1,6 +1,7 @@
 package com.yomahub.liteflow.test.ruledb;
 
 import com.yomahub.liteflow.repository.ChangeSourceHealth;
+import com.yomahub.liteflow.repository.ManualPollingChangeSourceAdapter;
 import com.yomahub.liteflow.repository.RuleChangeListener;
 import com.yomahub.liteflow.repository.RuleChangeSource;
 import com.yomahub.liteflow.repository.RuleDbProvider;
@@ -16,6 +17,8 @@ import java.util.List;
 public class InMemoryRuleDbProvider implements RuleDbProvider {
 
     private final InMemoryChangeSource changeSource = new InMemoryChangeSource();
+    private final RuleChangeSource exposedChangeSource =
+            new ManualPollingChangeSourceAdapter(changeSource, this::pollOnce);
     private final InMemoryRuleRepository repository = new InMemoryRuleRepository() {
         @Override
         public RuleManifest fetchManifest() {
@@ -37,7 +40,7 @@ public class InMemoryRuleDbProvider implements RuleDbProvider {
 
     @Override
     public RuleChangeSource changeSource() {
-        return changeSource;
+        return exposedChangeSource;
     }
 
     public void emit(ChangeRecord change) {
@@ -74,7 +77,21 @@ public class InMemoryRuleDbProvider implements RuleDbProvider {
 
     @Override
     public void close() {
-        changeSource.close();
+        exposedChangeSource.close();
+    }
+
+    private void pollOnce() {
+        long cursor = changeSource.getCursor();
+        if (repository.fetchLatestSeq() <= cursor) {
+            return;
+        }
+        try {
+            for (ChangeRecord change : repository.fetchChangesSince(cursor)) {
+                changeSource.emit(change);
+            }
+        } catch (com.yomahub.liteflow.exception.SeqGapException gap) {
+            changeSource.requestReconcile();
+        }
     }
 
     static final class InMemoryChangeSource implements RuleChangeSource {
@@ -258,6 +275,12 @@ public class InMemoryRuleDbProvider implements RuleDbProvider {
         public int getCloseCalls() {
             synchronized (monitor) {
                 return closeCalls;
+            }
+        }
+
+        public long getCursor() {
+            synchronized (monitor) {
+                return cursor;
             }
         }
 
