@@ -28,6 +28,7 @@ final class LegacyRuleChangeSource implements RuleChangeSource, ManualPollingCha
 	private long cursor;
 	private boolean activated;
 	private boolean closed;
+	private ChangeSourceHealth health = ChangeSourceHealth.starting();
 
 	LegacyRuleChangeSource(RuleRepository repository) {
 		this.repository = repository;
@@ -41,11 +42,17 @@ final class LegacyRuleChangeSource implements RuleChangeSource, ManualPollingCha
 			}
 			listener = nextListener;
 		}
-		repository.subscribe(this::onLegacyChanges);
+		try {
+			repository.subscribe(this::onLegacyChanges);
+		} catch (RuntimeException e) {
+			markDegraded(e);
+			LOG.warn("legacy rule-db subscribe failed; continuing with polling: {}", e.getMessage());
+		}
 	}
 
 	private void onLegacyChanges(List<ChangeRecord> changes) {
 		if (changes == null || changes.isEmpty()) {
+			requestReconcile("empty legacy change callback");
 			return;
 		}
 		synchronized (monitor) {
@@ -68,6 +75,7 @@ final class LegacyRuleChangeSource implements RuleChangeSource, ManualPollingCha
 			}
 			cursor = baselineSeq;
 			activated = true;
+			health = health.successful(cursor);
 			buffered.removeIf(c -> c == null || c.getSeq() <= cursor);
 		}
 		drain();
@@ -93,19 +101,14 @@ final class LegacyRuleChangeSource implements RuleChangeSource, ManualPollingCha
 			try {
 				callback.onChanges(batch);
 			} catch (RuntimeException e) {
+				markDegraded(e);
 				synchronized (monitor) {
 					if (!closed) {
 						// Keep the queued batch and cursor unchanged for retry/reconcile.
 						buffered.removeIf(c -> c == null || c.getSeq() <= cursor);
 					}
 				}
-				if (!closed) {
-					try {
-						callback.onReconcileRequired();
-					} catch (RuntimeException reconcileFailure) {
-						LOG.warn("legacy rule-db reconcile failed: {}", reconcileFailure.getMessage());
-					}
-				}
+				requestReconcile(callback, "legacy change delivery failure");
 				LOG.warn("legacy rule-db change delivery failed: {}", e.getMessage());
 				return;
 			}
@@ -116,6 +119,7 @@ final class LegacyRuleChangeSource implements RuleChangeSource, ManualPollingCha
 					}
 				}
 				buffered.removeAll(batch);
+				health = health.successful(cursor);
 			}
 		}
 	}
@@ -140,10 +144,9 @@ final class LegacyRuleChangeSource implements RuleChangeSource, ManualPollingCha
 			synchronized (monitor) {
 				callback = listener;
 			}
-			if (callback != null) {
-				callback.onReconcileRequired();
-			}
+			requestReconcile(callback, "legacy sequence gap");
 		} catch (RuntimeException e) {
+			markDegraded(e);
 			LOG.warn("legacy rule-db poll failed: {}", e.getMessage());
 		}
 	}
@@ -164,7 +167,7 @@ final class LegacyRuleChangeSource implements RuleChangeSource, ManualPollingCha
 	@Override
 	public ChangeSourceHealth health() {
 		synchronized (monitor) {
-			return ChangeSourceHealth.up(cursor);
+			return health;
 		}
 	}
 
@@ -180,9 +183,38 @@ final class LegacyRuleChangeSource implements RuleChangeSource, ManualPollingCha
 			buffered.clear();
 			scheduler = pollScheduler;
 			pollScheduler = null;
+			health = health.down(null);
 		}
 		if (scheduler != null) {
 			scheduler.shutdownNow();
+		}
+	}
+
+	private void requestReconcile(String reason) {
+		RuleChangeListener callback;
+		synchronized (monitor) {
+			callback = listener;
+		}
+		requestReconcile(callback, reason);
+	}
+
+	private void requestReconcile(RuleChangeListener callback, String reason) {
+		if (callback == null) {
+			return;
+		}
+		try {
+			callback.onReconcileRequired();
+		} catch (RuntimeException e) {
+			markDegraded(e);
+			LOG.warn("legacy rule-db reconcile request failed ({}): {}", reason, e.getMessage());
+		}
+	}
+
+	private void markDegraded(RuntimeException error) {
+		synchronized (monitor) {
+			if (!closed) {
+				health = health.degraded(error.getMessage());
+			}
 		}
 	}
 

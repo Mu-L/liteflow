@@ -65,6 +65,7 @@ public class RuleDbRuntime {
 	static final AtomicLong LAST_APPLIED_SEQ = new AtomicLong(0);
 
 	private static volatile boolean initialized = false;
+	private static volatile RuleRepository activeRepository;
 
 	/**
 	 * isActive() 结果缓存：该标志在运行期不会改变（SPI 实现是否在 classpath、enabled 配置均固定），
@@ -110,24 +111,22 @@ public class RuleDbRuntime {
 			// Open the source before reading the manifest so events observed during the
 			// snapshot are buffered and replayed after its sequence baseline is known.
 			RuleDbSyncManager.open(provider);
-			RuleManifest manifest = provider.repository().fetchManifest();
+			activeRepository = RuleDbSyncManager.activeRepository();
+			RuleManifest manifest = activeRepository.fetchManifest();
 
 			// 注册 chain 影子
 			if (CollUtil.isNotEmpty(manifest.getChains())) {
 				for (ChainMeta cm : manifest.getChains()) {
-					CHAIN_VERSION_INDEX.put(cm.getChainId(), cm.getVersion());
-					FlowBus.addChain(cm.getChainId()); // 影子 Chain：只有 id，isCompiled=false
-					Chain shadow = FlowBus.getChain(cm.getChainId());
-					if (shadow != null) {
-						SHADOW_CHAINS.put(cm.getChainId(), shadow);
-					}
+					registerShadowChain(cm);
 				}
 			}
 			// 注册 script 影子
 			if (CollUtil.isNotEmpty(manifest.getScripts())) {
 				for (ScriptMeta sm : manifest.getScripts()) {
-					SCRIPT_VERSION_INDEX.put(sm.getNodeId(), sm.getVersion());
 					registerShadowScript(sm);
+					if (SHADOW_SCRIPTS.containsKey(sm.getNodeId())) {
+						SCRIPT_VERSION_INDEX.put(sm.getNodeId(), sm.getVersion());
+					}
 				}
 			}
 			initialized = true;
@@ -153,6 +152,8 @@ public class RuleDbRuntime {
 
 	private static RuleDbProvider legacyProvider(RuleRepository repository) {
 		return new RuleDbProvider() {
+			private final LegacyRuleChangeSource source = new LegacyRuleChangeSource(repository);
+
 			@Override
 			public RuleRepository repository() {
 				return repository;
@@ -160,11 +161,12 @@ public class RuleDbRuntime {
 
 			@Override
 			public RuleChangeSource changeSource() {
-				return new LegacyRuleChangeSource(repository);
+				return source;
 			}
 
 			@Override
 			public void close() {
+				source.close();
 				repository.close();
 			}
 		};
@@ -193,11 +195,37 @@ public class RuleDbRuntime {
 	 * 直接 new Node 并放入 nodeMap，进入未编译态。
 	 */
 	private static void registerShadowScript(ScriptMeta sm) {
+		if (FlowBus.containNode(sm.getNodeId())) {
+			Node existing = FlowBus.getNode(sm.getNodeId());
+			if (SHADOW_SCRIPTS.get(sm.getNodeId()) != existing) {
+				LOG.warn("rule-db script[{}] collides with an application node; keeping application node",
+						sm.getNodeId());
+				return;
+			}
+		}
 		NodeTypeEnum type = NodeTypeEnum.getEnumByCode(sm.getType());
 		Node node = new Node(sm.getNodeId(), sm.getName(), type, null, sm.getLanguage());
 		node.setCompiled(false);
 		FlowBus.getNodeMap().put(sm.getNodeId(), node);
 		SHADOW_SCRIPTS.put(sm.getNodeId(), node);
+	}
+
+	private static void registerShadowChain(ChainMeta cm) {
+		String chainId = cm.getChainId();
+		Chain existing = FlowBus.getChain(chainId);
+		Chain owned = SHADOW_CHAINS.get(chainId);
+		if (existing != null && existing != owned) {
+			LOG.warn("rule-db chain[{}] collides with an application chain; keeping application chain", chainId);
+			return;
+		}
+		if (existing == null) {
+			FlowBus.addChain(chainId);
+			existing = FlowBus.getChain(chainId);
+		}
+		if (existing != null) {
+			SHADOW_CHAINS.put(chainId, existing);
+			CHAIN_VERSION_INDEX.put(chainId, cm.getVersion());
+		}
 	}
 
 	/** buildUnCompileChain 回源钩子：影子或版本失效时，拉内容填 EL，交由后续既有编译逻辑 */
@@ -220,6 +248,9 @@ public class RuleDbRuntime {
 			// 索引里有但 FlowBus 无影子（理论上不发生，防御性补注册）
 			FlowBus.addChain(chainId);
 			chain = FlowBus.getChain(chainId);
+			if (chain != null) {
+				SHADOW_CHAINS.put(chainId, chain);
+			}
 		}
 		chain.setEl(record.getEl());
 		// 与 LiteFlowChainELBuilder.setEL 保持一致地计算并写入 elMd5，
@@ -249,6 +280,7 @@ public class RuleDbRuntime {
 		if (authVersion == null) {
 			return;
 		}
+		SHADOW_SCRIPTS.put(nodeId, node);
 		Long cachedVersion = SCRIPT_CACHED_VERSION.get(nodeId);
 		if (StrUtil.isNotBlank(node.getScript()) && authVersion.equals(cachedVersion)) {
 			return;
@@ -271,7 +303,7 @@ public class RuleDbRuntime {
 		RuntimeException last = null;
 		for (int i = 0; i <= retry; i++) {
 			try {
-				return RuleRepositoryHolder.get().fetchChain(chainId);
+				return repositoryForRead().fetchChain(chainId);
 			} catch (RuntimeException e) {
 				last = e;
 			}
@@ -285,7 +317,7 @@ public class RuleDbRuntime {
 		RuntimeException last = null;
 		for (int i = 0; i <= retry; i++) {
 			try {
-				return RuleRepositoryHolder.get().fetchScript(nodeId);
+				return repositoryForRead().fetchScript(nodeId);
 			} catch (RuntimeException e) {
 				last = e;
 			}
@@ -297,6 +329,18 @@ public class RuleDbRuntime {
 	private static int retryTimes() {
 		RuleDbConfig ruleDb = LiteflowConfigGetter.get().getRuleDb();
 		return ruleDb == null || ruleDb.getFetchRetryTimes() == null ? 3 : ruleDb.getFetchRetryTimes();
+	}
+
+	private static RuleRepository repositoryForRead() {
+		RuleRepository repository = activeRepository;
+		if (repository != null) {
+			return repository;
+		}
+		RuleDbProvider provider = RuleDbProviderHolder.get();
+		if (provider != null && provider.repository() != null) {
+			return provider.repository();
+		}
+		return RuleRepositoryHolder.get();
 	}
 
 	/** 编译完成后登记：chain 驻留缓存 + 收集引用的脚本节点（引用计数+1） */
@@ -392,7 +436,7 @@ public class RuleDbRuntime {
 				CHAIN_VERSION_INDEX.remove(id);
 				CHAIN_CACHED_VERSION.remove(id);
 				CHAIN_CACHED_MD5.remove(id);
-				FlowBus.removeChain(id);
+				removeOwnedChain(id);
 			} else {
 				Long cur = CHAIN_VERSION_INDEX.get(id);
 				// spec §8.5 幂等：缓存版本 ≥ 通知版本则忽略（DELETE 分支不受此限）
@@ -402,11 +446,7 @@ public class RuleDbRuntime {
 				CHAIN_VERSION_INDEX.put(id, version);
 				if (cur == null) {
 					// 新增 chain：注册影子
-					FlowBus.addChain(id);
-					Chain shadow = FlowBus.getChain(id);
-					if (shadow != null) {
-						SHADOW_CHAINS.put(id, shadow);
-					}
+					registerShadowChain(new ChainMeta(id, version, null));
 				}
 				// 缓存态失效：置为过期，下次 ensureChainLoaded 回源
 				invalidateChainCache(id);
@@ -416,7 +456,7 @@ public class RuleDbRuntime {
 				SCRIPT_VERSION_INDEX.remove(id);
 				SCRIPT_CACHED_VERSION.remove(id);
 				SCRIPT_CACHED_MD5.remove(id);
-				FlowBus.unloadScriptNode(id);
+				removeOwnedScript(id);
 			} else {
 				Long cur = SCRIPT_VERSION_INDEX.get(id);
 				// spec §8.5 幂等：缓存版本 ≥ 通知版本则忽略（DELETE 分支不受此限）
@@ -432,6 +472,9 @@ public class RuleDbRuntime {
 					}
 					registerShadowScript(new ScriptMeta(id, record.getVersion(), record.getMd5(),
 							record.getType(), record.getLanguage(), record.getName()));
+					if (!SHADOW_SCRIPTS.containsKey(id)) {
+						return;
+					}
 				}
 				SCRIPT_VERSION_INDEX.put(id, version);
 				invalidateScriptCache(id);
@@ -473,8 +516,10 @@ public class RuleDbRuntime {
 				Long cur = SCRIPT_VERSION_INDEX.get(sm.getNodeId());
 				if (cur == null) {
 					// 新增脚本：登记影子 Node + 版本戳
-					SCRIPT_VERSION_INDEX.put(sm.getNodeId(), sm.getVersion());
 					registerShadowScript(sm);
+					if (SHADOW_SCRIPTS.containsKey(sm.getNodeId())) {
+						SCRIPT_VERSION_INDEX.put(sm.getNodeId(), sm.getVersion());
+					}
 				} else if (cur != sm.getVersion()
 						|| md5Mismatch(SCRIPT_CACHED_MD5.get(sm.getNodeId()), sm.getMd5())) {
 					applyChange(new ChangeRecord(0, ChangeRecord.TargetType.SCRIPT,
@@ -493,6 +538,20 @@ public class RuleDbRuntime {
 	/** 双方 md5 都在手才比较；缓存态没有 md5（影子/未回源）时不构成脏写信号 */
 	private static boolean md5Mismatch(String cachedMd5, String manifestMd5) {
 		return StrUtil.isNotBlank(cachedMd5) && StrUtil.isNotBlank(manifestMd5) && !cachedMd5.equals(manifestMd5);
+	}
+
+	private static void removeOwnedChain(String chainId) {
+		Chain owned = SHADOW_CHAINS.remove(chainId);
+		if (owned != null && FlowBus.getChain(chainId) == owned) {
+			FlowBus.removeChain(chainId);
+		}
+	}
+
+	private static void removeOwnedScript(String nodeId) {
+		Node owned = SHADOW_SCRIPTS.remove(nodeId);
+		if (owned != null && FlowBus.getNode(nodeId) == owned) {
+			FlowBus.unloadScriptNode(nodeId);
+		}
 	}
 
 	public static synchronized void destroy() {
@@ -524,6 +583,8 @@ public class RuleDbRuntime {
 		CHAIN_CACHED_MD5.clear();
 		SCRIPT_CACHED_MD5.clear();
 		LAST_APPLIED_SEQ.set(0);
+		activeRepository = null;
+		RuleRepositoryHolder.clearCached();
 		initialized = false;
 	}
 }

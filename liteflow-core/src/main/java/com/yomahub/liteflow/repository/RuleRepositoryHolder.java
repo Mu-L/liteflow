@@ -46,4 +46,10 @@ public class RuleRepositoryHolder {
 		RuleDbProviderHolder.reset();
 	}
 
+	/** Clears only the cached legacy/provider fallback without closing a live provider. */
+	static synchronized void clearCached() {
+		repository = null;
+		resolved = false;
+	}
+
 }

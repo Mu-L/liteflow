@@ -92,7 +92,6 @@ public class RuleDbSyncManager {
 		try {
 			nextSource.open(LISTENER);
 		} catch (RuntimeException e) {
-			closeQuietly(nextSource);
 			closeQuietly(nextProvider);
 			RuleDbProviderHolder.clearIf(nextProvider);
 			running = false;
@@ -175,7 +174,11 @@ public class RuleDbSyncManager {
 	}
 
 	private static void applyChanges(List<ChangeRecord> changes, boolean requireRunning) {
-		if (changes == null || changes.isEmpty()) {
+		if (changes == null) {
+			requestReconcile(requireRunning);
+			return;
+		}
+		if (changes.isEmpty()) {
 			return;
 		}
 		synchronized (CALLBACK_MONITOR) {
@@ -189,6 +192,7 @@ public class RuleDbSyncManager {
 				}
 			}
 			if (ordered.isEmpty()) {
+				requestReconcile(requireRunning);
 				return;
 			}
 			ordered.sort(Comparator.comparingLong(ChangeRecord::getSeq));
@@ -196,7 +200,7 @@ public class RuleDbSyncManager {
 			long nextCursor = initialCursor;
 			try {
 				for (ChangeRecord change : ordered) {
-					if (change.getSeq() > 0 && change.getSeq() <= nextCursor) {
+					if (change.getSeq() > 0 && change.getSeq() <= initialCursor) {
 						continue;
 					}
 					RuleDbRuntime.applyChange(change);
@@ -219,6 +223,18 @@ public class RuleDbSyncManager {
 				}
 				throw applyFailure;
 			}
+		}
+	}
+
+	private static void requestReconcile(boolean requireRunning) {
+		if (!requireRunning || !running) {
+			return;
+		}
+		try {
+			reconcileNow();
+		} catch (RuntimeException reconcileFailure) {
+			LOG.warn("rule-db reconcile after invalid change batch failed: {}",
+				reconcileFailure.getMessage());
 		}
 	}
 
@@ -251,13 +267,11 @@ public class RuleDbSyncManager {
 		};
 	}
 
-	/** Stops scheduling and closes the source; late callbacks become no-ops. */
+	/** Stops scheduling and closes the provider-owned resources; late callbacks become no-ops. */
 	public static synchronized void stop() {
-		RuleChangeSource source;
 		RuleDbProvider currentProvider;
 		synchronized (CALLBACK_MONITOR) {
 			running = false;
-			source = changeSource;
 			currentProvider = provider;
 			changeSource = null;
 			provider = null;
@@ -267,9 +281,6 @@ public class RuleDbSyncManager {
 			reconcileScheduler.shutdownNow();
 			reconcileScheduler = null;
 		}
-		if (source != null) {
-			closeQuietly(source);
-		}
 		if (currentProvider != null) {
 			closeQuietly(currentProvider);
 			RuleDbProviderHolder.clearIf(currentProvider);
@@ -278,6 +289,10 @@ public class RuleDbSyncManager {
 
 	static boolean isOpen() {
 		return running;
+	}
+
+	static RuleRepository activeRepository() {
+		return repository;
 	}
 
 	private static void closeQuietly(AutoCloseable closeable) {
