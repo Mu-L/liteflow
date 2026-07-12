@@ -32,6 +32,8 @@ public class InMemoryRuleDbProvider implements RuleDbProvider {
         }
     };
     private volatile Runnable afterManifestSnapshot;
+    private int providerCloseCalls;
+    private boolean throwOnClose;
 
     @Override
     public RuleRepository repository() {
@@ -75,9 +77,21 @@ public class InMemoryRuleDbProvider implements RuleDbProvider {
         return changeSource.getCloseCalls();
     }
 
+    public int getProviderCloseCalls() {
+        return providerCloseCalls;
+    }
+
+    public void throwOnClose() {
+        throwOnClose = true;
+    }
+
     @Override
     public void close() {
+        providerCloseCalls++;
         exposedChangeSource.close();
+        if (throwOnClose) {
+            throw new RuntimeException("in-memory provider close failure");
+        }
     }
 
     private void pollOnce() {

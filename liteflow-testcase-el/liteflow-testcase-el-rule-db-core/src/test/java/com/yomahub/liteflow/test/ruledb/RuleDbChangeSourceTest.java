@@ -45,6 +45,17 @@ public class RuleDbChangeSourceTest extends BaseRuleDbTest {
     }
 
     @Test
+    void providerCloseIsExactlyOnceWhenCloseThrows() {
+        InMemoryRuleDbProvider provider = provider();
+        buildExecutor(new RuleDbConfig());
+        provider.throwOnClose();
+
+        Assertions.assertDoesNotThrow(RuleDbRuntime::destroy);
+        Assertions.assertDoesNotThrow(RuleDbRuntime::destroy);
+        Assertions.assertEquals(1, provider.getProviderCloseCalls());
+    }
+
+    @Test
     void activateDropsBaselineDuplicatesAndAppliesBufferedChangesInOrder() {
         InMemoryRuleDbProvider provider = provider();
         InMemoryRuleRepository.publishChain("baseline", "THEN(a)");

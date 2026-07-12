@@ -72,4 +72,12 @@ public final class RuleDbProviderHolder {
 			}
 		}
 	}
+
+	/** Clears a provider whose lifecycle was already closed by the runtime. */
+	static synchronized void clearIf(RuleDbProvider expected) {
+		if (provider == expected) {
+			provider = null;
+			resolved = false;
+		}
+	}
 }
