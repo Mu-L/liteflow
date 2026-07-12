@@ -118,6 +118,9 @@ public class Chain implements Executable {
 		this.runtimeIdTL.set(System.nanoTime());
 
 		//如果EL还未编译，则进行编译
+		if (com.yomahub.liteflow.repository.RuleDbRuntime.isChainStale(chainId)) {
+			this.setCompiled(false);
+		}
 		if (BooleanUtil.isFalse(isCompiled)) {
 			synchronized (this) {
 				if (BooleanUtil.isFalse(isCompiled)) {

@@ -2,6 +2,8 @@ package com.yomahub.liteflow.test.ruledb;
 
 import com.yomahub.liteflow.core.FlowExecutor;
 import com.yomahub.liteflow.flow.FlowBus;
+import com.yomahub.liteflow.flow.element.Node;
+import com.yomahub.liteflow.meta.LiteflowMetaOperator;
 import com.yomahub.liteflow.property.RuleDbConfig;
 import com.yomahub.liteflow.repository.RuleDbProviderHolder;
 import com.yomahub.liteflow.repository.RuleDbRuntime;
@@ -71,6 +73,53 @@ public class RuleDbVersionStateTest extends BaseRuleDbTest {
 		Assertions.assertEquals(1L, state.getActiveVersion());
 		Assertions.assertEquals(RuleTargetStatus.STALE, state.getStatus());
 		Assertions.assertEquals("THEN(a, b)", FlowBus.getChain("chain1").getEl());
+		Assertions.assertTrue(FlowBus.getChain("chain1").isCompiled());
+	}
+
+	@Test
+	public void testScriptUpsertKeepsActiveCompiledArtifactUntilExecution() {
+		InMemoryRuleRepository.publishScript("s1", "defaultContext.setData(\"s1\", \"old\");", "script", "groovy");
+		InMemoryRuleRepository.publishChain("chain1", "THEN(a, s1)");
+		registerCommonCmp();
+		FlowExecutor executor = buildExecutor(new RuleDbConfig());
+		Assertions.assertTrue(executor.execute2Resp("chain1", "arg").isSuccess());
+		Node activeNode = scriptNode("chain1", "s1");
+		String activeScript = activeNode.getScript();
+
+		InMemoryRuleRepository.publishScript("s1", "defaultContext.setData(\"s1\", \"new\");", "script", "groovy");
+		emitLastChange();
+
+		Assertions.assertEquals(activeScript, scriptNode("chain1", "s1").getScript());
+		Assertions.assertTrue(scriptNode("chain1", "s1").isCompiled());
+		Assertions.assertEquals(1L, RuleDbRuntime.scriptState("s1").getActiveVersion());
+		Assertions.assertEquals(RuleTargetStatus.STALE, RuleDbRuntime.scriptState("s1").getStatus());
+	}
+
+	@Test
+	public void testInvalidFirstChainDoesNotBecomeReady() {
+		InMemoryRuleRepository.publishChain("badChain", "THEN(missing)");
+		registerCommonCmp();
+		FlowExecutor executor = buildExecutor(new RuleDbConfig());
+
+		Assertions.assertFalse(executor.execute2Resp("badChain", "arg").isSuccess());
+		RuleTargetState state = RuleDbRuntime.chainState("badChain");
+		Assertions.assertEquals(0L, state.getActiveVersion());
+		Assertions.assertEquals(RuleTargetStatus.FAILED, state.getStatus());
+		Assertions.assertNotNull(state.getLastError());
+	}
+
+	@Test
+	public void testInvalidFirstScriptDoesNotBecomeReady() {
+		InMemoryRuleRepository.publishScript("badScript", "defaultContext.setData(", "script", "groovy");
+		InMemoryRuleRepository.publishChain("badScriptChain", "THEN(a, badScript)");
+		registerCommonCmp();
+		FlowExecutor executor = buildExecutor(new RuleDbConfig());
+
+		Assertions.assertFalse(executor.execute2Resp("badScriptChain", "arg").isSuccess());
+		RuleTargetState state = RuleDbRuntime.scriptState("badScript");
+		Assertions.assertEquals(0L, state.getActiveVersion());
+		Assertions.assertEquals(RuleTargetStatus.FAILED, state.getStatus());
+		Assertions.assertNotNull(state.getLastError());
 	}
 
 	@Test
@@ -130,5 +179,14 @@ public class RuleDbVersionStateTest extends BaseRuleDbTest {
 
 	private InMemoryRuleDbProvider provider() {
 		return (InMemoryRuleDbProvider) RuleDbProviderHolder.get();
+	}
+
+	private Node scriptNode(String chainId, String nodeId) {
+		for (Node node : LiteflowMetaOperator.getNodes(chainId)) {
+			if (nodeId.equals(node.getId())) {
+				return node;
+			}
+		}
+		throw new AssertionError("script node not found: " + nodeId);
 	}
 }

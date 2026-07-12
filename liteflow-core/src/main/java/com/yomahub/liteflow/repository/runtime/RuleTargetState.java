@@ -12,6 +12,8 @@ public final class RuleTargetState {
 	private final ReentrantLock loadLock = new ReentrantLock();
 	private volatile String desiredMd5;
 	private volatile String activeMd5;
+	private volatile long loadedVersion;
+	private volatile String loadedMd5;
 	private volatile RuleTargetStatus status = RuleTargetStatus.SHADOW;
 	private volatile Throwable lastError;
 
@@ -42,6 +44,33 @@ public final class RuleTargetState {
 		return true;
 	}
 
+	public synchronized void markLoaded(long version, String md5) {
+		loadedVersion = version;
+		loadedMd5 = md5;
+		status = RuleTargetStatus.LOADING;
+		lastError = null;
+	}
+
+	public synchronized boolean isDesiredLoaded() {
+		return loadedVersion == desiredVersion.get()
+				&& (desiredMd5 == null || Objects.equals(loadedMd5, desiredMd5));
+	}
+
+	public synchronized void activateLoaded() {
+		if (loadedVersion == 0) {
+			return;
+		}
+		activeVersion.set(loadedVersion);
+		activeMd5 = loadedMd5;
+		if (desiredVersion.get() == loadedVersion && desiredMd5 == null) {
+			desiredMd5 = loadedMd5;
+		}
+		loadedVersion = 0;
+		loadedMd5 = null;
+		lastError = null;
+		status = readyOrStale();
+	}
+
 	public synchronized void activate(long version, String md5) {
 		activeVersion.set(version);
 		activeMd5 = md5;
@@ -55,6 +84,8 @@ public final class RuleTargetState {
 	public synchronized void clearActive() {
 		activeVersion.set(0);
 		activeMd5 = null;
+		loadedVersion = 0;
+		loadedMd5 = null;
 		lastError = null;
 		if (status != RuleTargetStatus.DELETED) {
 			status = RuleTargetStatus.SHADOW;
@@ -72,8 +103,10 @@ public final class RuleTargetState {
 	}
 
 	public synchronized void markFailed(Throwable error) {
-		status = RuleTargetStatus.FAILED;
-		lastError = error;
+		if (status != RuleTargetStatus.DELETED) {
+			status = RuleTargetStatus.FAILED;
+			lastError = error;
+		}
 	}
 
 	private RuleTargetStatus readyOrStale() {

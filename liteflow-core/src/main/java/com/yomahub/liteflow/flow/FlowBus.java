@@ -271,19 +271,25 @@ public class FlowBus {
 	}
 
 	public static void compileScriptNode(Node node) {
-		// Rule-DB 模式：脚本影子/失效先回源填 script（传 node 本体：EL 编译期会 clone Node）
-		if (com.yomahub.liteflow.repository.RuleDbRuntime.isActive()){
-			com.yomahub.liteflow.repository.RuleDbRuntime.ensureScriptLoaded(node);
-		}
-		String nodeId = node.getId(), name = node.getName(), script = node.getScript(), language = node.getLanguage();
-		NodeTypeEnum type = node.getType();
+		boolean ruleDbActive = com.yomahub.liteflow.repository.RuleDbRuntime.isActive();
+		String nodeId = node.getId(), name = node.getName();
         try {
+			// Rule-DB 模式：脚本影子/失效先回源填 script（传 node 本体：EL 编译期会 clone Node）
+			if (ruleDbActive){
+				com.yomahub.liteflow.repository.RuleDbRuntime.ensureScriptLoaded(node);
+			}
+			String script = node.getScript(), language = node.getLanguage();
+			NodeTypeEnum type = node.getType();
             List<NodeComponent> cmpInstanceList = getNodeComponentList(nodeId, name, type, ScriptComponent.ScriptComponentClassMap.get(type));
 
 			NodeComponent cmpInstance = cmpInstanceList.get(0);
 
 			addCompiledNode2Map(node, nodeId, script, language, type, cmpInstance);
+			com.yomahub.liteflow.repository.RuleDbRuntime.recordCompiledScript(nodeId);
         } catch (Exception e) {
+			if (ruleDbActive) {
+				com.yomahub.liteflow.repository.RuleDbRuntime.markScriptLoadFailed(nodeId, e);
+			}
 			String error = StrUtil.format("component[{}] register error", StrUtil.isEmpty(name) ? nodeId : StrUtil.format("{}({})", nodeId, name));
 			LOG.error(e.getMessage());
 			throw new ComponentCannotRegisterException(StrUtil.format("{} {}", error, e.getMessage()), e);

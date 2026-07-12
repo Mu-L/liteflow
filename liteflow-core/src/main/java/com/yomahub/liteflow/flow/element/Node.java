@@ -163,6 +163,9 @@ public class Node implements Executable, Cloneable, Rollbackable{
 
 	public NodeComponent getInstance() {
 		// 没有编译的情况，需重新编译
+		if (com.yomahub.liteflow.repository.RuleDbRuntime.isScriptStale(id)) {
+			this.setCompiled(false);
+		}
 		if (!this.isCompiled()) {
 			synchronized (this) {
 				if (!this.isCompiled()) {

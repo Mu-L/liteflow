@@ -239,7 +239,7 @@ public class RuleDbRuntime {
 		}
 		Chain chain = FlowBus.getChain(chainId);
 		if (chain != null && StrUtil.isNotBlank(chain.getEl())
-				&& state.getStatus() == RuleTargetStatus.READY) {
+				&& (state.getStatus() == RuleTargetStatus.READY || state.isDesiredLoaded())) {
 			return; // EL 已在手且版本一致
 		}
 		ChainRecord record = fetchChainWithRetry(chainId);
@@ -263,7 +263,7 @@ public class RuleDbRuntime {
 			chain.setNamespace(record.getNamespace());
 		}
 		chain.setCompiled(false);
-		state.activate(record.getVersion(), record.getMd5());
+		state.markLoaded(record.getVersion(), record.getMd5());
 	}
 
 	/**
@@ -279,7 +279,8 @@ public class RuleDbRuntime {
 			return;
 		}
 		SHADOW_SCRIPTS.put(nodeId, node);
-		if (StrUtil.isNotBlank(node.getScript()) && state.getDesiredVersion() == state.getActiveVersion()) {
+		if (StrUtil.isNotBlank(node.getScript())
+				&& (state.getStatus() == RuleTargetStatus.READY || state.isDesiredLoaded())) {
 			return;
 		}
 		ScriptRecord record = fetchScriptWithRetry(nodeId);
@@ -288,7 +289,7 @@ public class RuleDbRuntime {
 		}
 		node.setScript(record.getScript());
 		node.setLanguage(record.getLanguage());
-		state.activate(record.getVersion(), record.getMd5());
+		state.markLoaded(record.getVersion(), record.getMd5());
 	}
 
 	private static ChainRecord fetchChainWithRetry(String chainId) {
@@ -366,6 +367,10 @@ public class RuleDbRuntime {
 
 	/** 编译完成后登记：chain 驻留缓存 + 收集引用的脚本节点（引用计数+1） */
 	public static void recordCompiledChain(String chainId) {
+		RuleTargetState state = CHAIN_STATES.get(chainId);
+		if (state != null) {
+			state.activateLoaded();
+		}
 		List<String> scriptRefs = new ArrayList<>();
 		try {
 			for (Node n : LiteflowMetaOperator.getNodes(chainId)) {
@@ -376,6 +381,37 @@ public class RuleDbRuntime {
 		} catch (Exception ignored) {
 		}
 		RuleDbCache.recordChainAccess(chainId, scriptRefs);
+	}
+
+	public static void recordCompiledScript(String nodeId) {
+		RuleTargetState state = SCRIPT_STATES.get(nodeId);
+		if (state != null) {
+			state.activateLoaded();
+		}
+	}
+
+	public static void markChainLoadFailed(String chainId, Throwable error) {
+		RuleTargetState state = CHAIN_STATES.get(chainId);
+		if (state != null) {
+			state.markFailed(error);
+		}
+	}
+
+	public static void markScriptLoadFailed(String nodeId, Throwable error) {
+		RuleTargetState state = SCRIPT_STATES.get(nodeId);
+		if (state != null) {
+			state.markFailed(error);
+		}
+	}
+
+	public static boolean isChainStale(String chainId) {
+		RuleTargetState state = CHAIN_STATES.get(chainId);
+		return isLive(state) && state.getStatus() == RuleTargetStatus.STALE;
+	}
+
+	public static boolean isScriptStale(String nodeId) {
+		RuleTargetState state = SCRIPT_STATES.get(nodeId);
+		return isLive(state) && state.getStatus() == RuleTargetStatus.STALE;
 	}
 
 	// ---- 索引/缓存态操作，供 Task 4/5 的 Cache/SyncManager 使用 ----
@@ -484,9 +520,7 @@ public class RuleDbRuntime {
 					}
 					return;
 				}
-				if (state.updateDesired(version, null)) {
-					invalidateChainCache(id);
-				}
+				state.updateDesired(version, null);
 			}
 		} else {
 			assertNoForeignScript(id);
@@ -515,9 +549,7 @@ public class RuleDbRuntime {
 					}
 					return;
 				}
-				if (state.updateDesired(version, null)) {
-					invalidateScriptCache(id);
-				}
+				state.updateDesired(version, null);
 			}
 		}
 	}
@@ -542,9 +574,7 @@ public class RuleDbRuntime {
 				} else if (cm.getVersion() > state.getDesiredVersion()
 						|| (cm.getVersion() == state.getDesiredVersion()
 						&& md5Mismatch(state.getDesiredMd5(), cm.getMd5()))) {
-					if (state.updateDesired(cm.getVersion(), cm.getMd5())) {
-						invalidateChainCache(cm.getChainId());
-					}
+					state.updateDesired(cm.getVersion(), cm.getMd5());
 				}
 			}
 		}
@@ -566,9 +596,7 @@ public class RuleDbRuntime {
 				} else if (sm.getVersion() > state.getDesiredVersion()
 						|| (sm.getVersion() == state.getDesiredVersion()
 						&& md5Mismatch(state.getDesiredMd5(), sm.getMd5()))) {
-					if (state.updateDesired(sm.getVersion(), sm.getMd5())) {
-						invalidateScriptCache(sm.getNodeId());
-					}
+					state.updateDesired(sm.getVersion(), sm.getMd5());
 				}
 			}
 		}
