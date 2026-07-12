@@ -1,6 +1,5 @@
 package com.yomahub.liteflow.repository;
 
-import com.yomahub.liteflow.exception.SeqGapException;
 import com.yomahub.liteflow.log.LFLog;
 import com.yomahub.liteflow.log.LFLoggerManager;
 import com.yomahub.liteflow.property.LiteflowConfigGetter;
@@ -70,13 +69,21 @@ public class RuleDbSyncManager {
 		if (nextProvider == null) {
 			throw new IllegalArgumentException("rule-db provider must not be null");
 		}
-		RuleRepository nextRepository = nextProvider.repository();
-		RuleChangeSource nextSource = nextProvider.changeSource();
-		if (nextRepository == null) {
-			throw new IllegalArgumentException("rule-db provider repository must not be null");
-		}
-		if (nextSource == null) {
-			nextSource = new NoopChangeSource();
+		RuleRepository nextRepository;
+		RuleChangeSource nextSource;
+		try {
+			nextRepository = nextProvider.repository();
+			nextSource = nextProvider.changeSource();
+			if (nextRepository == null) {
+				throw new IllegalArgumentException("rule-db provider repository must not be null");
+			}
+			if (nextSource == null) {
+				nextSource = new NoopChangeSource();
+			}
+		} catch (RuntimeException e) {
+			closeQuietly(nextProvider);
+			RuleDbProviderHolder.clearIf(nextProvider);
+			throw e;
 		}
 		provider = nextProvider;
 		repository = nextRepository;
@@ -85,6 +92,9 @@ public class RuleDbSyncManager {
 		try {
 			nextSource.open(LISTENER);
 		} catch (RuntimeException e) {
+			closeQuietly(nextSource);
+			closeQuietly(nextProvider);
+			RuleDbProviderHolder.clearIf(nextProvider);
 			running = false;
 			provider = null;
 			repository = null;
@@ -132,28 +142,15 @@ public class RuleDbSyncManager {
 	 * themselves; this method retains the transitional repository API for tests.
 	 */
 	public static void pollOnce() {
-		RuleRepository repo = repository;
-		if (repo == null) {
-			repo = RuleRepositoryHolder.get();
-		}
-		if (repo == null) {
+		RuleChangeSource source = changeSource;
+		if (!(source instanceof ManualPollingChangeSource)) {
 			return;
 		}
 		synchronized (CALLBACK_MONITOR) {
 			if (!running) {
 				return;
 			}
-			long last = RuleDbRuntime.LAST_APPLIED_SEQ.get();
-			long latest = repo.fetchLatestSeq();
-			if (latest <= last) {
-				return;
-			}
-			try {
-				applyChanges(repo.fetchChangesSince(last), true);
-			} catch (SeqGapException gap) {
-				LOG.warn("seq gap detected, trigger full reconcile: {}", gap.getMessage());
-				reconcileNow();
-			}
+			((ManualPollingChangeSource) source).pollOnce();
 		}
 	}
 
@@ -185,20 +182,42 @@ public class RuleDbSyncManager {
 			if (requireRunning && !running) {
 				return;
 			}
-			List<ChangeRecord> ordered = new ArrayList<>(changes);
+			List<ChangeRecord> ordered = new ArrayList<>();
+			for (ChangeRecord change : changes) {
+				if (change != null) {
+					ordered.add(change);
+				}
+			}
+			if (ordered.isEmpty()) {
+				return;
+			}
 			ordered.sort(Comparator.comparingLong(ChangeRecord::getSeq));
-			for (ChangeRecord change : ordered) {
-				if (change == null) {
-					continue;
+			long initialCursor = RuleDbRuntime.LAST_APPLIED_SEQ.get();
+			long nextCursor = initialCursor;
+			try {
+				for (ChangeRecord change : ordered) {
+					if (change.getSeq() > 0 && change.getSeq() <= nextCursor) {
+						continue;
+					}
+					RuleDbRuntime.applyChange(change);
+					if (change.getSeq() > 0) {
+						nextCursor = Math.max(nextCursor, change.getSeq());
+					}
 				}
-				long current = RuleDbRuntime.LAST_APPLIED_SEQ.get();
-				if (change.getSeq() > 0 && change.getSeq() <= current) {
-					continue;
+				advanceSeq(nextCursor);
+			} catch (RuntimeException applyFailure) {
+				// The batch cursor is intentionally left unchanged. Reconcile from the
+				// authoritative manifest so providers that cannot replay callbacks do
+				// not silently lose the queued event.
+				if (requireRunning && running) {
+					try {
+						reconcileNow();
+					} catch (RuntimeException reconcileFailure) {
+						LOG.warn("rule-db reconcile after change failure failed: {}",
+								reconcileFailure.getMessage());
+					}
 				}
-				RuleDbRuntime.applyChange(change);
-				if (change.getSeq() > 0) {
-					advanceSeq(change.getSeq());
-				}
+				throw applyFailure;
 			}
 		}
 	}
@@ -235,9 +254,11 @@ public class RuleDbSyncManager {
 	/** Stops scheduling and closes the source; late callbacks become no-ops. */
 	public static synchronized void stop() {
 		RuleChangeSource source;
+		RuleDbProvider currentProvider;
 		synchronized (CALLBACK_MONITOR) {
 			running = false;
 			source = changeSource;
+			currentProvider = provider;
 			changeSource = null;
 			provider = null;
 			repository = null;
@@ -247,7 +268,26 @@ public class RuleDbSyncManager {
 			reconcileScheduler = null;
 		}
 		if (source != null) {
-			source.close();
+			closeQuietly(source);
+		}
+		if (currentProvider != null) {
+			closeQuietly(currentProvider);
+			RuleDbProviderHolder.clearIf(currentProvider);
+		}
+	}
+
+	static boolean isOpen() {
+		return running;
+	}
+
+	private static void closeQuietly(AutoCloseable closeable) {
+		if (closeable == null) {
+			return;
+		}
+		try {
+			closeable.close();
+		} catch (Exception e) {
+			LOG.warn("rule-db resource close failed: {}", e.getMessage());
 		}
 	}
 
