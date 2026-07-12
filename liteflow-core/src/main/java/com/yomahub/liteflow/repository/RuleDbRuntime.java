@@ -9,6 +9,8 @@ import com.yomahub.liteflow.exception.ChainLoadException;
 import com.yomahub.liteflow.exception.ConfigErrorException;
 import com.yomahub.liteflow.flow.FlowBus;
 import com.yomahub.liteflow.flow.element.Chain;
+import com.yomahub.liteflow.flow.element.Condition;
+import com.yomahub.liteflow.flow.element.Executable;
 import com.yomahub.liteflow.flow.element.Node;
 import com.yomahub.liteflow.log.LFLog;
 import com.yomahub.liteflow.log.LFLoggerManager;
@@ -27,7 +29,9 @@ import com.yomahub.liteflow.repository.vo.ScriptRecord;
 import com.yomahub.liteflow.util.ElRegexUtil;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashSet;
+import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -52,8 +56,38 @@ public class RuleDbRuntime {
 	/** Shadow objects registered by this runtime, used to avoid removing application-owned metadata. */
 	private static final Map<String, Chain> SHADOW_CHAINS = new ConcurrentHashMap<>();
 	private static final Map<String, Node> SHADOW_SCRIPTS = new ConcurrentHashMap<>();
-	private static final Map<Chain, RuleTargetState> CHAIN_LOAD_STATES = new ConcurrentHashMap<>();
-	private static final Map<Node, RuleTargetState> SCRIPT_LOAD_STATES = new ConcurrentHashMap<>();
+	private static final Map<Chain, RuleLoadAttempt> CHAIN_LOAD_STATES = new ConcurrentHashMap<>();
+	private static final Map<Node, RuleLoadAttempt> SCRIPT_LOAD_STATES = new ConcurrentHashMap<>();
+
+	private static final class RuleLoadAttempt {
+
+		private final RuleTargetState state;
+		private final long version;
+		private final String md5;
+
+		private RuleLoadAttempt(RuleTargetState state) {
+			synchronized (state) {
+				this.state = state;
+				this.version = state.getDesiredVersion();
+				this.md5 = state.getDesiredMd5();
+			}
+		}
+
+		private RuleLoadAttempt(RuleTargetState state, long version, String md5) {
+			this.state = state;
+			this.version = version;
+			this.md5 = md5;
+		}
+
+		private boolean markFailedIfCurrent(RuleTargetState current, Throwable error) {
+			if (current != state) {
+				return false;
+			}
+			synchronized (state) {
+				return state.isGenerationCurrent(version, md5) && state.markFailed(error);
+			}
+		}
+	}
 
 	static final AtomicLong LAST_APPLIED_SEQ = new AtomicLong(0);
 
@@ -241,7 +275,7 @@ public class RuleDbRuntime {
 		}
 		Chain chain = FlowBus.getChain(chainId);
 		if (chain != null) {
-			CHAIN_LOAD_STATES.put(chain, state);
+			CHAIN_LOAD_STATES.put(chain, new RuleLoadAttempt(state));
 		}
 		if (chain != null && StrUtil.isNotBlank(chain.getEl())
 				&& (state.getStatus() == RuleTargetStatus.READY || state.isDesiredLoaded())) {
@@ -282,6 +316,7 @@ public class RuleDbRuntime {
 			}
 			throw new ChainLoadException(StrUtil.format("chain[{}] changed or was deleted while loading", chainId));
 		}
+		CHAIN_LOAD_STATES.put(chain, new RuleLoadAttempt(state, record.getVersion(), record.getMd5()));
 	}
 
 	/**
@@ -299,7 +334,7 @@ public class RuleDbRuntime {
 		if (state.isDeleted()) {
 			throw new ChainLoadException(StrUtil.format("script node[{}] was deleted from rule repository", nodeId));
 		}
-		SCRIPT_LOAD_STATES.put(node, state);
+		SCRIPT_LOAD_STATES.put(node, new RuleLoadAttempt(state));
 		if (StrUtil.isNotBlank(node.getScript())
 				&& (state.getStatus() == RuleTargetStatus.READY || state.isDesiredLoaded())) {
 			return;
@@ -324,6 +359,7 @@ public class RuleDbRuntime {
 			}
 			throw new ChainLoadException(StrUtil.format("script node[{}] changed or was deleted while loading", nodeId));
 		}
+		SCRIPT_LOAD_STATES.put(node, new RuleLoadAttempt(state, record.getVersion(), record.getMd5()));
 	}
 
 	private static ChainRecord fetchChainWithRetry(String chainId) {
@@ -412,8 +448,8 @@ public class RuleDbRuntime {
 
 	private static synchronized void recordCompiledChain(String chainId, Chain compiledChain) {
 		RuleTargetState state = CHAIN_STATES.get(chainId);
-		RuleTargetState loadState = compiledChain == null ? null : CHAIN_LOAD_STATES.remove(compiledChain);
-		if (loadState != null && loadState != state) {
+		RuleLoadAttempt loadAttempt = compiledChain == null ? null : CHAIN_LOAD_STATES.remove(compiledChain);
+		if (loadAttempt != null && loadAttempt.state != state) {
 			if (compiledChain != null) {
 				compiledChain.setCompiled(false);
 				restoreOrRemoveLateChain(chainId, compiledChain);
@@ -465,10 +501,10 @@ public class RuleDbRuntime {
 
 	private static synchronized void recordCompiledScript(String nodeId, Node compiledNode) {
 		RuleTargetState state = SCRIPT_STATES.get(nodeId);
-		RuleTargetState loadState = compiledNode == null ? null : SCRIPT_LOAD_STATES.get(compiledNode);
-		if (state != null && (loadState != state || state.isDeleted())) {
+		RuleLoadAttempt loadAttempt = compiledNode == null ? null : SCRIPT_LOAD_STATES.get(compiledNode);
+		if (state != null && (loadAttempt == null || loadAttempt.state != state || state.isDeleted())) {
 			if (compiledNode != null) {
-				SCRIPT_LOAD_STATES.remove(compiledNode, loadState);
+				SCRIPT_LOAD_STATES.remove(compiledNode, loadAttempt);
 				compiledNode.setCompiled(false);
 				restoreOrRemoveLateScript(nodeId, compiledNode);
 			}
@@ -480,25 +516,25 @@ public class RuleDbRuntime {
 		Node owned = SHADOW_SCRIPTS.get(nodeId);
 		if (!state.isDesiredLoaded() || owned == null || FlowBus.getNode(nodeId) != owned
 				|| (owned != compiledNode && !FlowBus.replaceNode(nodeId, owned, compiledNode))) {
-			SCRIPT_LOAD_STATES.remove(compiledNode, loadState);
+			SCRIPT_LOAD_STATES.remove(compiledNode, loadAttempt);
 			compiledNode.setCompiled(false);
 			restoreOrRemoveLateScript(nodeId, compiledNode);
 			return;
 		}
 		if (owned != compiledNode && !SHADOW_SCRIPTS.replace(nodeId, owned, compiledNode)) {
 			FlowBus.replaceNode(nodeId, compiledNode, owned);
-			SCRIPT_LOAD_STATES.remove(compiledNode, loadState);
+			SCRIPT_LOAD_STATES.remove(compiledNode, loadAttempt);
 			compiledNode.setCompiled(false);
 			return;
 		}
 		if (!state.activateLoaded()) {
 			SHADOW_SCRIPTS.replace(nodeId, compiledNode, owned);
 			FlowBus.replaceNode(nodeId, compiledNode, owned);
-			SCRIPT_LOAD_STATES.remove(compiledNode, loadState);
+			SCRIPT_LOAD_STATES.remove(compiledNode, loadAttempt);
 			compiledNode.setCompiled(false);
 			return;
 		}
-		SCRIPT_LOAD_STATES.remove(compiledNode, loadState);
+		SCRIPT_LOAD_STATES.remove(compiledNode, loadAttempt);
 	}
 
 	public static void markChainLoadFailed(String chainId, Throwable error) {
@@ -509,24 +545,21 @@ public class RuleDbRuntime {
 		if (chain == null) {
 			return;
 		}
-		RuleTargetState state = CHAIN_LOAD_STATES.remove(chain);
-		if (state != null && CHAIN_STATES.get(chain.getChainId()) == state) {
-			state.markFailed(error);
+		RuleLoadAttempt attempt = CHAIN_LOAD_STATES.remove(chain);
+		if (attempt != null) {
+			attempt.markFailedIfCurrent(CHAIN_STATES.get(chain.getChainId()), error);
 		}
 	}
 
 	public static void markScriptLoadFailed(String nodeId, Throwable error) {
-		RuleTargetState state = SCRIPT_STATES.get(nodeId);
-		if (state != null) {
-			state.markFailed(error);
-		}
+		markScriptLoadFailed(FlowBus.getNode(nodeId), error);
 	}
 
 	public static void markScriptLoadFailed(Node node, Throwable error) {
 		if (node != null) {
-			RuleTargetState state = SCRIPT_LOAD_STATES.remove(node);
-			if (state != null && SCRIPT_STATES.get(node.getId()) == state) {
-				state.markFailed(error);
+			RuleLoadAttempt attempt = SCRIPT_LOAD_STATES.remove(node);
+			if (attempt != null) {
+				attempt.markFailedIfCurrent(SCRIPT_STATES.get(node.getId()), error);
 			}
 		}
 	}
@@ -594,25 +627,48 @@ public class RuleDbRuntime {
 			node.setScript(null);
 			node.setCompiled(false);
 		}
+		invalidateScriptClones(nodeId);
+	}
+
+	private static void invalidateScriptClones(String nodeId) {
 		// 已编译 chain 的条件树里持有的是克隆 Node（浅拷贝连 isCompiled/instance 一起拷），
 		// 只失效 nodeMap 驻留的那一个时，其余克隆仍是已编译态，在别的 chain 重载执行器产物之前
 		// 会一直跑旧脚本——必须把所有条件树里的同 id 克隆一并失效（对齐 FlowBus.reloadScript 的克隆更新语义）
+		Set<Executable> visited = Collections.newSetFromMap(new IdentityHashMap<Executable, Boolean>());
 		for (Chain chain : FlowBus.getChainMap().values()) {
-			if (CollUtil.isEmpty(chain.getConditionList())) {
-				continue; // 影子/已失效 chain 无条件树
+			invalidateScriptClones(nodeId, chain, visited);
+		}
+	}
+
+	private static void invalidateScriptClones(String nodeId, Executable executable, Set<Executable> visited) {
+		if (executable == null || !visited.add(executable)) {
+			return;
+		}
+		if (executable instanceof Node) {
+			Node node = (Node) executable;
+			if (nodeId.equals(node.getId())) {
+				node.setScript(null);
+				node.setCompiled(false);
 			}
-			List<Node> nodesInChain;
-			try {
-				nodesInChain = LiteflowMetaOperator.getNodes(chain);
-			} catch (Exception e) {
-				// 树中引用的子链可能刚被失效退影子（conditionList=null），递归收集会 NPE；
-				// 跳过即可——该子链重编时会经 compileScriptNode 拿到新脚本
-				continue;
+			return;
+		}
+		if (executable instanceof Chain) {
+			List<Condition> conditions = ((Chain) executable).getConditionList();
+			if (CollUtil.isEmpty(conditions)) {
+				return;
 			}
-			for (Node n : nodesInChain) {
-				if (nodeId.equals(n.getId())) {
-					n.setScript(null);
-					n.setCompiled(false);
+			for (Condition condition : conditions) {
+				invalidateScriptClones(nodeId, condition, visited);
+			}
+			return;
+		}
+		if (executable instanceof Condition) {
+			for (List<Executable> group : ((Condition) executable).getExecutableGroup().values()) {
+				if (CollUtil.isEmpty(group)) {
+					continue;
+				}
+				for (Executable item : group) {
+					invalidateScriptClones(nodeId, item, visited);
 				}
 			}
 		}
@@ -807,6 +863,9 @@ public class RuleDbRuntime {
 
 	private static void restoreOrRemoveLateChain(String chainId, Chain lateInstalled) {
 		Chain owned = SHADOW_CHAINS.get(chainId);
+		if (owned == lateInstalled && isLive(CHAIN_STATES.get(chainId))) {
+			return;
+		}
 		if (owned != null && owned != lateInstalled && isLive(CHAIN_STATES.get(chainId))) {
 			FlowBus.replaceChain(chainId, lateInstalled, owned);
 		} else {
@@ -831,10 +890,7 @@ public class RuleDbRuntime {
 	}
 
 	private static void removeOwnedScript(String nodeId) {
-		LiteflowMetaOperator.getNodesInAllChain(nodeId).forEach(node -> {
-			node.setScript(null);
-			node.setCompiled(false);
-		});
+		invalidateScriptClones(nodeId);
 		Node owned = SHADOW_SCRIPTS.remove(nodeId);
 		if (owned != null) {
 			FlowBus.removeNode(nodeId, owned);

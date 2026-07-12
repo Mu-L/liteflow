@@ -3,8 +3,12 @@ package com.yomahub.liteflow.test.ruledb;
 import com.yomahub.liteflow.core.FlowExecutor;
 import com.yomahub.liteflow.flow.FlowBus;
 import com.yomahub.liteflow.flow.LiteflowResponse;
+import com.yomahub.liteflow.flow.element.Node;
+import com.yomahub.liteflow.meta.LiteflowMetaOperator;
 import com.yomahub.liteflow.property.RuleDbConfig;
+import com.yomahub.liteflow.repository.RuleDbRuntime;
 import com.yomahub.liteflow.repository.RuleDbSyncManager;
+import com.yomahub.liteflow.repository.runtime.RuleTargetStatus;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
 
@@ -96,6 +100,32 @@ public class RuleDbDeleteTest extends BaseRuleDbTest {
 		LiteflowResponse r = executor.execute2Resp("chain1", "arg");
 		Assertions.assertTrue(r.isSuccess());
 		Assertions.assertEquals("b==>a", r.getExecuteStepStr());
+	}
+
+	@Test
+	public void testDeleteScriptSkipsNestedShadowChainAndInvalidatesCompiledClone() {
+		InMemoryRuleRepository.publishScript("safeDeleteScript", "defaultContext.setData(\"deleted\", true);", "script", "groovy");
+		InMemoryRuleRepository.publishChain("shadowChain", "THEN(a, b)");
+		InMemoryRuleRepository.publishChain("compiledChain", "THEN(a, safeDeleteScript, shadowChain)");
+		registerCommonCmp();
+		FlowExecutor executor = buildExecutor(new RuleDbConfig());
+		Assertions.assertTrue(executor.execute2Resp("compiledChain", "arg").isSuccess());
+		Node compiledClone = LiteflowMetaOperator.getNodes("compiledChain").stream()
+				.filter(node -> "safeDeleteScript".equals(node.getId()))
+				.findFirst()
+				.orElseThrow(() -> new AssertionError("compiled script clone not found"));
+		FlowBus.getChain("shadowChain").setConditionList(null);
+		Assertions.assertNull(FlowBus.getChain("shadowChain").getConditionList());
+
+		InMemoryRuleRepository.deleteScript("safeDeleteScript");
+
+		Assertions.assertDoesNotThrow(RuleDbSyncManager::pollOnce);
+		Assertions.assertEquals(RuleTargetStatus.DELETED,
+				RuleDbRuntime.scriptState("safeDeleteScript").getStatus());
+		Assertions.assertNull(compiledClone.getScript());
+		Assertions.assertFalse(compiledClone.isCompiled());
+		Assertions.assertNull(FlowBus.getNode("safeDeleteScript"));
+		Assertions.assertFalse(executor.execute2Resp("compiledChain", "arg").isSuccess());
 	}
 
 }

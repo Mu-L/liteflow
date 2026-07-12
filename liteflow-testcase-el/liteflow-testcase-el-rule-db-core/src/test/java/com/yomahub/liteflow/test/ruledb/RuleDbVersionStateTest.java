@@ -9,6 +9,7 @@ import com.yomahub.liteflow.property.RuleDbConfig;
 import com.yomahub.liteflow.repository.RuleDbProviderHolder;
 import com.yomahub.liteflow.repository.RuleDbRuntime;
 import com.yomahub.liteflow.repository.RuleDbSyncManager;
+import com.yomahub.liteflow.repository.RuleRepository;
 import com.yomahub.liteflow.repository.runtime.RuleTargetState;
 import com.yomahub.liteflow.repository.runtime.RuleTargetStatus;
 import com.yomahub.liteflow.repository.vo.ChangeRecord;
@@ -385,6 +386,127 @@ public class RuleDbVersionStateTest extends BaseRuleDbTest {
 		}
 	}
 
+	@Test
+	public void testSameChainStateKeepsCanonicalWhenDesiredAdvancesDuringCompile() {
+		InMemoryRuleRepository.publishChain("advancingChain", "THEN(a, b)");
+		registerCommonCmp();
+		FlowExecutor executor = buildExecutor(new RuleDbConfig());
+		Assertions.assertTrue(executor.execute2Resp("advancingChain", "arg").isSuccess());
+		Chain canonical = FlowBus.getChain("advancingChain");
+
+		InMemoryRuleRepository.publishChain("advancingChain", "THEN(b, a)");
+		RuleDbRuntime.applyChange(lastChange());
+		RuleDbRuntime.ensureChainLoaded("advancingChain");
+		InMemoryRuleRepository.publishChain("advancingChain", "THEN(a, b, a)");
+		RuleDbRuntime.applyChange(lastChange());
+		canonical.setCompiled(true);
+
+		RuleDbRuntime.recordCompiledChain(canonical);
+
+		RuleTargetState state = RuleDbRuntime.chainState("advancingChain");
+		Assertions.assertSame(canonical, FlowBus.getChain("advancingChain"));
+		Assertions.assertFalse(canonical.isCompiled());
+		Assertions.assertEquals(RuleTargetStatus.STALE, state.getStatus());
+		Assertions.assertTrue(executor.execute2Resp("advancingChain", "arg").isSuccess());
+		Assertions.assertEquals(state.getDesiredVersion(), state.getActiveVersion());
+		Assertions.assertEquals(RuleTargetStatus.READY, state.getStatus());
+	}
+
+	@Test
+	public void testOldChainFailureDoesNotFailAdvancedGeneration() {
+		InMemoryRuleRepository.publishChain("advancedFailureChain", "THEN(a, b)");
+		buildExecutor(new RuleDbConfig());
+		Chain loadingChain = FlowBus.getChain("advancedFailureChain");
+		RuleDbRuntime.ensureChainLoaded("advancedFailureChain");
+
+		InMemoryRuleRepository.publishChain("advancedFailureChain", "THEN(b, a)");
+		RuleDbRuntime.applyChange(lastChange());
+		RuleTargetState state = RuleDbRuntime.chainState("advancedFailureChain");
+		RuleDbRuntime.markChainLoadFailed(loadingChain, new IllegalStateException("old chain load failed"));
+
+		Assertions.assertEquals(RuleTargetStatus.SHADOW, state.getStatus());
+		Assertions.assertNull(state.getLastError());
+	}
+
+	@Test
+	public void testOldScriptFailureDoesNotFailAdvancedGeneration() throws CloneNotSupportedException {
+		InMemoryRuleRepository.publishScript("advancedFailureScript", "defaultContext.setData(\"v\", 1);", "script", "groovy");
+		buildExecutor(new RuleDbConfig());
+		Node loadingScript = FlowBus.getNode("advancedFailureScript").clone();
+		RuleDbRuntime.ensureScriptLoaded(loadingScript);
+
+		InMemoryRuleRepository.publishScript("advancedFailureScript", "defaultContext.setData(\"v\", 2);", "script", "groovy");
+		RuleDbRuntime.applyChange(lastChange());
+		RuleTargetState state = RuleDbRuntime.scriptState("advancedFailureScript");
+		RuleDbRuntime.markScriptLoadFailed(loadingScript, new IllegalStateException("old script load failed"));
+
+		Assertions.assertEquals(RuleTargetStatus.SHADOW, state.getStatus());
+		Assertions.assertNull(state.getLastError());
+	}
+
+	@Test
+	public void testChainFailureUsesGenerationActuallyLoadedAfterFetch() throws Exception {
+		InMemoryRuleRepository.publishChain("fetchAdvancedChain", "THEN(a, b)");
+		buildExecutor(new RuleDbConfig());
+		Chain loadingChain = FlowBus.getChain("fetchAdvancedChain");
+		setActiveRepository(new InMemoryRuleRepository() {
+			@Override
+			public com.yomahub.liteflow.repository.vo.ChainRecord fetchChain(String chainId) {
+				InMemoryRuleRepository.publishChain(chainId, "THEN(missing)");
+				RuleDbRuntime.applyChange(lastChange());
+				return super.fetchChain(chainId);
+			}
+		});
+
+		RuleDbRuntime.ensureChainLoaded("fetchAdvancedChain");
+		RuleTargetState state = RuleDbRuntime.chainState("fetchAdvancedChain");
+		IllegalStateException failure = new IllegalStateException("v2 chain compile failed");
+		RuleDbRuntime.markChainLoadFailed(loadingChain, failure);
+
+		Assertions.assertEquals(2L, state.getDesiredVersion());
+		Assertions.assertEquals(RuleTargetStatus.FAILED, state.getStatus());
+		Assertions.assertSame(failure, state.getLastError());
+	}
+
+	@Test
+	public void testScriptFailureUsesGenerationActuallyLoadedAfterFetch() throws Exception {
+		InMemoryRuleRepository.publishScript("fetchAdvancedScript", "defaultContext.setData(\"v\", 1);", "script", "groovy");
+		buildExecutor(new RuleDbConfig());
+		Node loadingScript = FlowBus.getNode("fetchAdvancedScript").clone();
+		setActiveRepository(new InMemoryRuleRepository() {
+			@Override
+			public com.yomahub.liteflow.repository.vo.ScriptRecord fetchScript(String nodeId) {
+				InMemoryRuleRepository.publishScript(nodeId, "defaultContext.setData(\"v\", 2);", "script", "groovy");
+				RuleDbRuntime.applyChange(lastChange());
+				return super.fetchScript(nodeId);
+			}
+		});
+
+		RuleDbRuntime.ensureScriptLoaded(loadingScript);
+		RuleTargetState state = RuleDbRuntime.scriptState("fetchAdvancedScript");
+		IllegalStateException failure = new IllegalStateException("v2 script compile failed");
+		RuleDbRuntime.markScriptLoadFailed(loadingScript, failure);
+
+		Assertions.assertEquals(2L, state.getDesiredVersion());
+		Assertions.assertEquals(RuleTargetStatus.FAILED, state.getStatus());
+		Assertions.assertSame(failure, state.getLastError());
+	}
+
+	@Test
+	public void testScriptFailureByIdDoesNotFailAdvancedGeneration() {
+		InMemoryRuleRepository.publishScript("failureByIdScript", "defaultContext.setData(\"v\", 1);", "script", "groovy");
+		buildExecutor(new RuleDbConfig());
+		RuleDbRuntime.ensureScriptLoaded(FlowBus.getNode("failureByIdScript"));
+
+		InMemoryRuleRepository.publishScript("failureByIdScript", "defaultContext.setData(\"v\", 2);", "script", "groovy");
+		RuleDbRuntime.applyChange(lastChange());
+		RuleTargetState state = RuleDbRuntime.scriptState("failureByIdScript");
+		RuleDbRuntime.markScriptLoadFailed("failureByIdScript", new IllegalStateException("old script load failed"));
+
+		Assertions.assertEquals(RuleTargetStatus.SHADOW, state.getStatus());
+		Assertions.assertNull(state.getLastError());
+	}
+
 	private FlowExecutor loadAndExecuteVersionOne() {
 		InMemoryRuleRepository.publishChain("chain1", "THEN(a, b)");
 		registerCommonCmp();
@@ -403,6 +525,12 @@ public class RuleDbVersionStateTest extends BaseRuleDbTest {
 
 	private InMemoryRuleDbProvider provider() {
 		return (InMemoryRuleDbProvider) RuleDbProviderHolder.get();
+	}
+
+	private void setActiveRepository(RuleRepository repository) throws Exception {
+		java.lang.reflect.Field field = RuleDbRuntime.class.getDeclaredField("activeRepository");
+		field.setAccessible(true);
+		field.set(null, repository);
 	}
 
 	private Node scriptNode(String chainId, String nodeId) {
