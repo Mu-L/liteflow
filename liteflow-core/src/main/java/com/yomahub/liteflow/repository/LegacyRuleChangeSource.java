@@ -28,6 +28,7 @@ final class LegacyRuleChangeSource implements RuleChangeSource, ManualPollingCha
 	private long cursor;
 	private boolean activated;
 	private boolean closed;
+	private boolean pendingReconcile;
 	private ChangeSourceHealth health = ChangeSourceHealth.starting();
 
 	LegacyRuleChangeSource(RuleRepository repository) {
@@ -45,6 +46,9 @@ final class LegacyRuleChangeSource implements RuleChangeSource, ManualPollingCha
 		try {
 			repository.subscribe(this::onLegacyChanges);
 		} catch (RuntimeException e) {
+			synchronized (monitor) {
+				pendingReconcile = true;
+			}
 			markDegraded(e);
 			LOG.warn("legacy rule-db subscribe failed; continuing with polling: {}", e.getMessage());
 		}
@@ -52,6 +56,12 @@ final class LegacyRuleChangeSource implements RuleChangeSource, ManualPollingCha
 
 	private void onLegacyChanges(List<ChangeRecord> changes) {
 		if (changes == null || changes.isEmpty()) {
+			synchronized (monitor) {
+				if (!activated) {
+					pendingReconcile = true;
+					return;
+				}
+			}
 			requestReconcile("empty legacy change callback");
 			return;
 		}
@@ -69,6 +79,7 @@ final class LegacyRuleChangeSource implements RuleChangeSource, ManualPollingCha
 
 	@Override
 	public void activate(long baselineSeq) {
+		boolean reconcile;
 		synchronized (monitor) {
 			if (closed) {
 				return;
@@ -77,9 +88,27 @@ final class LegacyRuleChangeSource implements RuleChangeSource, ManualPollingCha
 			activated = true;
 			health = health.successful(cursor);
 			buffered.removeIf(c -> c == null || c.getSeq() <= cursor);
+			reconcile = pendingReconcile;
+			pendingReconcile = false;
 		}
 		drain();
+		if (reconcile) {
+			requestReconcile("pending pre-activation legacy signal");
+		}
 		startPolling();
+	}
+
+	@Override
+	public void onReconciled(long baselineSeq) {
+		synchronized (monitor) {
+			if (closed) {
+				return;
+			}
+			cursor = Math.max(cursor, baselineSeq);
+			buffered.removeIf(c -> c == null || c.getSeq() <= cursor);
+			pendingReconcile = false;
+			health = health.successful(cursor);
+		}
 	}
 
 	private void drain() {
@@ -135,11 +164,15 @@ final class LegacyRuleChangeSource implements RuleChangeSource, ManualPollingCha
 		}
 		try {
 			if (repository.fetchLatestSeq() <= since) {
+				synchronized (monitor) {
+					health = health.successful(cursor);
+				}
 				return;
 			}
 			List<ChangeRecord> changes = repository.fetchChangesSince(since);
 			onLegacyChanges(changes);
 		} catch (SeqGapException gap) {
+			markDegraded(gap);
 			RuleChangeListener callback;
 			synchronized (monitor) {
 				callback = listener;

@@ -10,6 +10,10 @@ public interface RuleChangeSource extends AutoCloseable {
 
 	void activate(long baselineSeq);
 
+	/** A successful full reconcile established a new authoritative cursor. */
+	default void onReconciled(long baselineSeq) {
+	}
+
 	ChangeSourceHealth health();
 
 	@Override

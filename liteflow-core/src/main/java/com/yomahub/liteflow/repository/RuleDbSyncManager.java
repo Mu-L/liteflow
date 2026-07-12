@@ -1,5 +1,7 @@
 package com.yomahub.liteflow.repository;
 
+import cn.hutool.core.util.StrUtil;
+import com.yomahub.liteflow.exception.ConfigErrorException;
 import com.yomahub.liteflow.log.LFLog;
 import com.yomahub.liteflow.log.LFLoggerManager;
 import com.yomahub.liteflow.property.LiteflowConfigGetter;
@@ -78,7 +80,7 @@ public class RuleDbSyncManager {
 				throw new IllegalArgumentException("rule-db provider repository must not be null");
 			}
 			if (nextSource == null) {
-				nextSource = new NoopChangeSource();
+				throw new ConfigErrorException("rule-db provider change source must not be null");
 			}
 		} catch (RuntimeException e) {
 			closeQuietly(nextProvider);
@@ -171,6 +173,10 @@ public class RuleDbSyncManager {
 		RuleManifest manifest = repo.fetchManifest();
 		RuleDbRuntime.reconcile(manifest);
 		advanceSeq(manifest.getLatestSeq());
+		RuleChangeSource source = changeSource;
+		if (source != null) {
+			source.onReconciled(manifest.getLatestSeq());
+		}
 	}
 
 	private static void applyChanges(List<ChangeRecord> changes, boolean requireRunning) {
@@ -194,6 +200,14 @@ public class RuleDbSyncManager {
 			if (ordered.isEmpty()) {
 				requestReconcile(requireRunning);
 				return;
+			}
+			for (ChangeRecord change : ordered) {
+				String validationError = validateChange(change);
+				if (validationError != null) {
+					LOG.warn("invalid rule-db change record, requesting reconcile: {}", validationError);
+					requestReconcile(requireRunning);
+					return;
+				}
 			}
 			ordered.sort(Comparator.comparingLong(ChangeRecord::getSeq));
 			long initialCursor = RuleDbRuntime.LAST_APPLIED_SEQ.get();
@@ -224,6 +238,26 @@ public class RuleDbSyncManager {
 				throw applyFailure;
 			}
 		}
+	}
+
+	private static String validateChange(ChangeRecord change) {
+		if (change.getTargetType() == null) {
+			return "targetType is null";
+		}
+		if (change.getOp() == null) {
+			return "op is null";
+		}
+		if (StrUtil.isBlank(change.getTargetId())) {
+			return "targetId is blank";
+		}
+		if (change.getSeq() <= 0) {
+			return "seq must be positive";
+		}
+		if (change.getVersion() < 0
+				|| (change.getOp() == ChangeRecord.Op.UPSERT && change.getVersion() == 0)) {
+			return "version is invalid";
+		}
+		return null;
 	}
 
 	private static void requestReconcile(boolean requireRunning) {
@@ -306,18 +340,4 @@ public class RuleDbSyncManager {
 		}
 	}
 
-	private static final class NoopChangeSource implements RuleChangeSource {
-		@Override
-		public void open(RuleChangeListener listener) {
-		}
-
-		@Override
-		public void activate(long baselineSeq) {
-		}
-
-		@Override
-		public ChangeSourceHealth health() {
-			return ChangeSourceHealth.starting();
-		}
-	}
 }

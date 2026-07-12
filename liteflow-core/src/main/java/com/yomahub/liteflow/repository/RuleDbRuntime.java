@@ -6,6 +6,7 @@ import cn.hutool.crypto.digest.MD5;
 import com.yomahub.liteflow.builder.el.LiteFlowChainELBuilder;
 import com.yomahub.liteflow.enums.NodeTypeEnum;
 import com.yomahub.liteflow.exception.ChainLoadException;
+import com.yomahub.liteflow.exception.ConfigErrorException;
 import com.yomahub.liteflow.flow.FlowBus;
 import com.yomahub.liteflow.flow.element.Chain;
 import com.yomahub.liteflow.flow.element.Node;
@@ -113,6 +114,8 @@ public class RuleDbRuntime {
 			RuleDbSyncManager.open(provider);
 			activeRepository = RuleDbSyncManager.activeRepository();
 			RuleManifest manifest = activeRepository.fetchManifest();
+			validateManifest(manifest);
+			validateManifestOwnership(manifest);
 
 			// 注册 chain 影子
 			if (CollUtil.isNotEmpty(manifest.getChains())) {
@@ -198,9 +201,7 @@ public class RuleDbRuntime {
 		if (FlowBus.containNode(sm.getNodeId())) {
 			Node existing = FlowBus.getNode(sm.getNodeId());
 			if (SHADOW_SCRIPTS.get(sm.getNodeId()) != existing) {
-				LOG.warn("rule-db script[{}] collides with an application node; keeping application node",
-						sm.getNodeId());
-				return;
+				throw collision("script", sm.getNodeId());
 			}
 		}
 		NodeTypeEnum type = NodeTypeEnum.getEnumByCode(sm.getType());
@@ -215,8 +216,7 @@ public class RuleDbRuntime {
 		Chain existing = FlowBus.getChain(chainId);
 		Chain owned = SHADOW_CHAINS.get(chainId);
 		if (existing != null && existing != owned) {
-			LOG.warn("rule-db chain[{}] collides with an application chain; keeping application chain", chainId);
-			return;
+			throw collision("chain", chainId);
 		}
 		if (existing == null) {
 			FlowBus.addChain(chainId);
@@ -432,6 +432,7 @@ public class RuleDbRuntime {
 		String id = change.getTargetId();
 		long version = change.getVersion();
 		if (change.getTargetType() == ChangeRecord.TargetType.CHAIN) {
+			assertNoForeignChain(id);
 			if (change.getOp() == ChangeRecord.Op.DELETE) {
 				CHAIN_VERSION_INDEX.remove(id);
 				CHAIN_CACHED_VERSION.remove(id);
@@ -440,18 +441,19 @@ public class RuleDbRuntime {
 			} else {
 				Long cur = CHAIN_VERSION_INDEX.get(id);
 				// spec §8.5 幂等：缓存版本 ≥ 通知版本则忽略（DELETE 分支不受此限）
-				if (cur != null && version < cur) {
+				if (cur != null && version <= cur) {
 					return;
 				}
-				CHAIN_VERSION_INDEX.put(id, version);
 				if (cur == null) {
 					// 新增 chain：注册影子
 					registerShadowChain(new ChainMeta(id, version, null));
 				}
+				CHAIN_VERSION_INDEX.put(id, version);
 				// 缓存态失效：置为过期，下次 ensureChainLoaded 回源
 				invalidateChainCache(id);
 			}
 		} else {
+			assertNoForeignScript(id);
 			if (change.getOp() == ChangeRecord.Op.DELETE) {
 				SCRIPT_VERSION_INDEX.remove(id);
 				SCRIPT_CACHED_VERSION.remove(id);
@@ -460,7 +462,7 @@ public class RuleDbRuntime {
 			} else {
 				Long cur = SCRIPT_VERSION_INDEX.get(id);
 				// spec §8.5 幂等：缓存版本 ≥ 通知版本则忽略（DELETE 分支不受此限）
-				if (cur != null && version < cur) {
+				if (cur != null && version <= cur) {
 					return;
 				}
 				if (cur == null) {
@@ -490,15 +492,18 @@ public class RuleDbRuntime {
 	 * 由 {@link RuleDbSyncManager#reconcileOnce()} 回调。
 	 */
 	public static void reconcile(RuleManifest manifest) {
+		validateManifest(manifest);
+		validateManifestOwnership(manifest);
 		Set<String> liveChains = new HashSet<>();
 		if (manifest.getChains() != null) {
 			for (ChainMeta cm : manifest.getChains()) {
 				liveChains.add(cm.getChainId());
 				Long cur = CHAIN_VERSION_INDEX.get(cm.getChainId());
-				if (cur == null || cur != cm.getVersion()
-						|| md5Mismatch(CHAIN_CACHED_MD5.get(cm.getChainId()), cm.getMd5())) {
+				if (cur == null || cur != cm.getVersion()) {
 					applyChange(new ChangeRecord(0, ChangeRecord.TargetType.CHAIN,
 							cm.getChainId(), ChangeRecord.Op.UPSERT, cm.getVersion()));
+				} else if (md5Mismatch(CHAIN_CACHED_MD5.get(cm.getChainId()), cm.getMd5())) {
+					invalidateChainCache(cm.getChainId());
 				}
 			}
 		}
@@ -520,10 +525,11 @@ public class RuleDbRuntime {
 					if (SHADOW_SCRIPTS.containsKey(sm.getNodeId())) {
 						SCRIPT_VERSION_INDEX.put(sm.getNodeId(), sm.getVersion());
 					}
-				} else if (cur != sm.getVersion()
-						|| md5Mismatch(SCRIPT_CACHED_MD5.get(sm.getNodeId()), sm.getMd5())) {
+				} else if (cur != sm.getVersion()) {
 					applyChange(new ChangeRecord(0, ChangeRecord.TargetType.SCRIPT,
 							sm.getNodeId(), ChangeRecord.Op.UPSERT, sm.getVersion()));
+				} else if (md5Mismatch(SCRIPT_CACHED_MD5.get(sm.getNodeId()), sm.getMd5())) {
+					invalidateScriptCache(sm.getNodeId());
 				}
 			}
 		}
@@ -538,6 +544,71 @@ public class RuleDbRuntime {
 	/** 双方 md5 都在手才比较；缓存态没有 md5（影子/未回源）时不构成脏写信号 */
 	private static boolean md5Mismatch(String cachedMd5, String manifestMd5) {
 		return StrUtil.isNotBlank(cachedMd5) && StrUtil.isNotBlank(manifestMd5) && !cachedMd5.equals(manifestMd5);
+	}
+
+	static void validateManifest(RuleManifest manifest) {
+		if (manifest == null) {
+			throw new ConfigErrorException("rule-db manifest must not be null");
+		}
+		if (manifest.getLatestSeq() < 0) {
+			throw new ConfigErrorException("rule-db manifest latestSeq must not be negative");
+		}
+		Set<String> chainIds = new HashSet<>();
+		if (manifest.getChains() != null) {
+			for (ChainMeta meta : manifest.getChains()) {
+				if (meta == null || StrUtil.isBlank(meta.getChainId()) || meta.getVersion() <= 0) {
+					throw new ConfigErrorException("rule-db manifest contains invalid chain metadata");
+				}
+				if (!chainIds.add(meta.getChainId())) {
+					throw new ConfigErrorException("rule-db manifest contains duplicate chain[" + meta.getChainId() + "]");
+				}
+			}
+		}
+		Set<String> scriptIds = new HashSet<>();
+		if (manifest.getScripts() != null) {
+			for (ScriptMeta meta : manifest.getScripts()) {
+				NodeTypeEnum type = meta == null ? null : NodeTypeEnum.getEnumByCode(meta.getType());
+				if (meta == null || StrUtil.isBlank(meta.getNodeId()) || meta.getVersion() <= 0
+						|| type == null || !type.isScript()) {
+					throw new ConfigErrorException("rule-db manifest contains invalid script metadata");
+				}
+				if (!scriptIds.add(meta.getNodeId())) {
+					throw new ConfigErrorException("rule-db manifest contains duplicate script[" + meta.getNodeId() + "]");
+				}
+			}
+		}
+	}
+
+	private static void validateManifestOwnership(RuleManifest manifest) {
+		if (manifest.getChains() != null) {
+			for (ChainMeta meta : manifest.getChains()) {
+				assertNoForeignChain(meta.getChainId());
+			}
+		}
+		if (manifest.getScripts() != null) {
+			for (ScriptMeta meta : manifest.getScripts()) {
+				assertNoForeignScript(meta.getNodeId());
+			}
+		}
+	}
+
+	private static void assertNoForeignChain(String chainId) {
+		Chain current = FlowBus.getChain(chainId);
+		if (current != null && current != SHADOW_CHAINS.get(chainId)) {
+			throw collision("chain", chainId);
+		}
+	}
+
+	private static void assertNoForeignScript(String nodeId) {
+		Node current = FlowBus.getNode(nodeId);
+		if (current != null && current != SHADOW_SCRIPTS.get(nodeId)) {
+			throw collision("script", nodeId);
+		}
+	}
+
+	private static ConfigErrorException collision(String type, String id) {
+		return new ConfigErrorException("rule-db " + type + "[" + id
+				+ "] collides with application-owned FlowBus metadata");
 	}
 
 	private static void removeOwnedChain(String chainId) {

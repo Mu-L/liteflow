@@ -2,6 +2,7 @@ package com.yomahub.liteflow.test.ruledb;
 
 import com.yomahub.liteflow.core.FlowExecutor;
 import com.yomahub.liteflow.enums.NodeTypeEnum;
+import com.yomahub.liteflow.exception.ConfigErrorException;
 import com.yomahub.liteflow.flow.FlowBus;
 import com.yomahub.liteflow.flow.element.Chain;
 import com.yomahub.liteflow.flow.element.Node;
@@ -51,5 +52,18 @@ public class RuleDbStartupTest extends BaseRuleDbTest {
                 "disabled rule-db must not touch the repository");
         Assertions.assertFalse(FlowBus.containChain("chain1"));
         Assertions.assertFalse(executor.execute2Resp("chain1", "arg").isSuccess());
+    }
+
+    @Test
+    public void testStartupCollisionFailsWithoutReplacingApplicationChain() {
+        Chain applicationChain = new Chain("collision");
+        applicationChain.setEl("THEN(a)");
+        FlowBus.addChainPhase1(applicationChain);
+        InMemoryRuleRepository.putChain("collision", "THEN(b)");
+
+        Assertions.assertThrows(ConfigErrorException.class,
+                () -> buildExecutor(new RuleDbConfig()));
+        Assertions.assertSame(applicationChain, FlowBus.getChain("collision"));
+        Assertions.assertEquals("THEN(a)", applicationChain.getEl());
     }
 }

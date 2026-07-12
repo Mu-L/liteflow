@@ -7,6 +7,7 @@ import java.util.Arrays;
 import java.util.Collections;
 
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -23,14 +24,19 @@ class RuleDbProviderHolderTest {
 
 	@Test
 	void resolveReportsAllConflictingProviderTypes() {
+		FirstProvider first = new FirstProvider();
+		SecondProvider second = new SecondProvider();
 		ConfigErrorException error = assertThrows(ConfigErrorException.class,
-				() -> RuleDbProviderHolder.resolve(Arrays.asList(new FirstProvider(), new SecondProvider())));
+				() -> RuleDbProviderHolder.resolve(Arrays.asList(first, second)));
 
 		assertTrue(error.getMessage().contains(FirstProvider.class.getName()));
 		assertTrue(error.getMessage().contains(SecondProvider.class.getName()));
+		assertEquals(1, first.closeCalls);
+		assertEquals(1, second.closeCalls);
 	}
 
 	private static class StubProvider implements RuleDbProvider {
+		int closeCalls;
 		@Override
 		public RuleRepository repository() {
 			return null;
@@ -39,6 +45,11 @@ class RuleDbProviderHolderTest {
 		@Override
 		public RuleChangeSource changeSource() {
 			return null;
+		}
+
+		@Override
+		public void close() {
+			closeCalls++;
 		}
 	}
 

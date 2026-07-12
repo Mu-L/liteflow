@@ -193,6 +193,22 @@ public class RuleDbConvergeTest extends BaseRuleDbTest {
 	}
 
 	@Test
+	public void testEqualVersionChangeDoesNotInvalidateOrRefetch() {
+		InMemoryRuleRepository.publishChain("chain1", "THEN(a, b)");
+		registerCommonCmp();
+		FlowExecutor executor = buildExecutor(new RuleDbConfig());
+		Assertions.assertEquals("a==>b", executor.execute2Resp("chain1", "arg").getExecuteStepStr());
+		int fetched = InMemoryRuleRepository.FETCH_CHAIN_COUNT.get();
+
+		((InMemoryRuleDbProvider) com.yomahub.liteflow.repository.RuleDbProviderHolder.get())
+				.emitBatch(java.util.Collections.singletonList(new ChangeRecord(2,
+						ChangeRecord.TargetType.CHAIN, "chain1", ChangeRecord.Op.UPSERT, 1)));
+
+		Assertions.assertEquals("a==>b", executor.execute2Resp("chain1", "arg").getExecuteStepStr());
+		Assertions.assertEquals(fetched, InMemoryRuleRepository.FETCH_CHAIN_COUNT.get());
+	}
+
+	@Test
 	public void testScriptInvalidationToleratesShadowSubChain() {
 		InMemoryRuleRepository.publishScript("s1", "defaultContext.setData(\"val\", \"old\");", "script", "groovy");
 		InMemoryRuleRepository.publishChain("sub2", "THEN(b)");

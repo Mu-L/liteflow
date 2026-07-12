@@ -22,6 +22,11 @@ public final class ManualPollingChangeSourceAdapter implements RuleChangeSource,
 	}
 
 	@Override
+	public void onReconciled(long baselineSeq) {
+		delegate.onReconciled(baselineSeq);
+	}
+
+	@Override
 	public ChangeSourceHealth health() {
 		return delegate.health();
 	}

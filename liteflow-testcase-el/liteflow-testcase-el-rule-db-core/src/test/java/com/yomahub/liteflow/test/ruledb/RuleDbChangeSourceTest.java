@@ -2,6 +2,8 @@ package com.yomahub.liteflow.test.ruledb;
 
 import com.yomahub.liteflow.core.FlowExecutor;
 import com.yomahub.liteflow.flow.FlowBus;
+import com.yomahub.liteflow.flow.element.Chain;
+import com.yomahub.liteflow.exception.ConfigErrorException;
 import com.yomahub.liteflow.property.RuleDbConfig;
 import com.yomahub.liteflow.repository.RuleDbProviderHolder;
 import com.yomahub.liteflow.repository.RuleDbRuntime;
@@ -11,6 +13,7 @@ import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
 
 import java.util.Arrays;
+import java.util.Collections;
 
 public class RuleDbChangeSourceTest extends BaseRuleDbTest {
 
@@ -86,6 +89,35 @@ public class RuleDbChangeSourceTest extends BaseRuleDbTest {
                         "ordered", ChangeRecord.Op.UPSERT, 2)));
 
         Assertions.assertEquals(2L, RuleDbRuntime.getChainVersion("ordered"));
+    }
+
+    @Test
+    void liveCollisionFailsWithoutReplacingApplicationChain() {
+        InMemoryRuleDbProvider provider = provider();
+        buildExecutor(new RuleDbConfig());
+        Chain applicationChain = new Chain("foreign");
+        applicationChain.setEl("THEN(a)");
+        FlowBus.addChainPhase1(applicationChain);
+
+        Assertions.assertThrows(ConfigErrorException.class, () -> provider.emitBatch(Collections.singletonList(
+                new ChangeRecord(1, ChangeRecord.TargetType.CHAIN,
+                        "foreign", ChangeRecord.Op.UPSERT, 1))));
+
+        Assertions.assertSame(applicationChain, FlowBus.getChain("foreign"));
+        Assertions.assertEquals("THEN(a)", applicationChain.getEl());
+    }
+
+    @Test
+    void malformedBatchRequestsReconcileWithoutApplying() {
+        InMemoryRuleDbProvider provider = provider();
+        buildExecutor(new RuleDbConfig());
+        int manifests = InMemoryRuleRepository.FETCH_MANIFEST_COUNT.get();
+
+        provider.emitBatch(Collections.singletonList(
+                new ChangeRecord(1, null, "invalid", ChangeRecord.Op.UPSERT, 1)));
+
+        Assertions.assertEquals(manifests + 1, InMemoryRuleRepository.FETCH_MANIFEST_COUNT.get());
+        Assertions.assertFalse(FlowBus.containChain("invalid"));
     }
 
     @Test
