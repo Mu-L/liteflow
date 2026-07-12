@@ -29,7 +29,7 @@ public class RuleRepositoryHolder {
 				throw new ConfigErrorException(
 						"multiple RuleRepository implementations found on classpath, keep only one of liteflow-rule-db-sql / liteflow-rule-db-redis");
 			}
-			repository = impls.isEmpty() ? null : impls.get(0);
+			repository = impls.isEmpty() ? RuleDbProviderHolder.repository() : impls.get(0);
 			resolved = true;
 		}
 		return repository;
@@ -43,6 +43,7 @@ public class RuleRepositoryHolder {
 	public static synchronized void reset() {
 		repository = null;
 		resolved = false;
+		RuleDbProviderHolder.reset();
 	}
 
 }

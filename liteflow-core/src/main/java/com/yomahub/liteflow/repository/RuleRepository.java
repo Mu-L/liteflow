@@ -6,6 +6,7 @@ import com.yomahub.liteflow.repository.vo.RuleManifest;
 import com.yomahub.liteflow.repository.vo.ScriptRecord;
 
 import java.util.List;
+import java.util.Collections;
 
 /**
  * Rule-DB 模式的规则权威源 SPI。
@@ -27,12 +28,19 @@ public interface RuleRepository {
 	ScriptRecord fetchScript(String nodeId);
 
 	/** 当前最大变更序号；无变更记录时返回 0 */
-	long fetchLatestSeq();
+	@Deprecated
+	default long fetchLatestSeq() {
+		return 0L;
+	}
 
 	/** 取 seq 之后的增量变更（升序）；发现 seq 已断档（变更日志被清理）时抛 SeqGapException */
-	List<ChangeRecord> fetchChangesSince(long seq);
+	@Deprecated
+	default List<ChangeRecord> fetchChangesSince(long seq) {
+		return Collections.emptyList();
+	}
 
 	/** 可选推送通道（Redis 实现，SQL 空实现） */
+	@Deprecated
 	default void subscribe(RuleChangeListener listener) {
 	}
 
@@ -41,6 +49,7 @@ public interface RuleRepository {
 	 * 无推送通道的实现（SQL）轮询是唯一感知手段，默认激进（3s）；
 	 * 有推送通道的实现（Redis）轮询只是丢消息兜底，应覆写为更宽松的值（30s）。
 	 */
+	@Deprecated
 	default int defaultSeqPollSeconds() {
 		return 3;
 	}

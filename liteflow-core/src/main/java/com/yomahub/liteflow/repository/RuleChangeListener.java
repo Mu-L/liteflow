@@ -11,8 +11,12 @@ import java.util.List;
  * @author Bryan.Zhang
  * @since 2.16.1
  */
+@FunctionalInterface
 public interface RuleChangeListener {
 
 	void onChanges(List<ChangeRecord> changes);
+
+	default void onReconcileRequired() {
+	}
 
 }
