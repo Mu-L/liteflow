@@ -87,3 +87,4 @@ atlassian-ide-plugin.xml
 .vscode
 .codegraph
 *.factorypath
+/.worktrees/
