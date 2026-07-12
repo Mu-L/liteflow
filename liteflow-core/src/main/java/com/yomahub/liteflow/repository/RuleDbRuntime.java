@@ -410,7 +410,7 @@ public class RuleDbRuntime {
 		}
 	}
 
-	private static void recordCompiledChain(String chainId, Chain compiledChain) {
+	private static synchronized void recordCompiledChain(String chainId, Chain compiledChain) {
 		RuleTargetState state = CHAIN_STATES.get(chainId);
 		RuleTargetState loadState = compiledChain == null ? null : CHAIN_LOAD_STATES.remove(compiledChain);
 		if (loadState != null && loadState != state) {

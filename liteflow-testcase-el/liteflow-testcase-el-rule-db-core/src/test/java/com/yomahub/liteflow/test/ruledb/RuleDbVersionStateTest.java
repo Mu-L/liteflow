@@ -15,6 +15,13 @@ import com.yomahub.liteflow.repository.vo.ChangeRecord;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
 
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
+
 public class RuleDbVersionStateTest extends BaseRuleDbTest {
 
 	@Test
@@ -349,6 +356,33 @@ public class RuleDbVersionStateTest extends BaseRuleDbTest {
 
 		Assertions.assertEquals(RuleTargetStatus.SHADOW, newState.getStatus());
 		Assertions.assertNull(newState.getLastError());
+	}
+
+	@Test
+	public void testChainCallbackUsesRuntimeChangeMonitor() throws Exception {
+		InMemoryRuleRepository.putChain("lockedChain", "THEN(a, b)");
+		buildExecutor(new RuleDbConfig());
+		Chain chain = FlowBus.getChain("lockedChain");
+		RuleDbRuntime.ensureChainLoaded("lockedChain");
+		ExecutorService executor = Executors.newSingleThreadExecutor();
+		try {
+			CountDownLatch started = new CountDownLatch(1);
+			Future<?> callback;
+			synchronized (RuleDbRuntime.class) {
+				callback = executor.submit(() -> {
+					started.countDown();
+					RuleDbRuntime.recordCompiledChain(chain);
+				});
+				Assertions.assertTrue(started.await(5, TimeUnit.SECONDS));
+				Future<?> pendingCallback = callback;
+				Assertions.assertThrows(TimeoutException.class,
+						() -> pendingCallback.get(100, TimeUnit.MILLISECONDS));
+			}
+			callback.get(5, TimeUnit.SECONDS);
+			Assertions.assertEquals(RuleTargetStatus.READY, RuleDbRuntime.chainState("lockedChain").getStatus());
+		} finally {
+			executor.shutdownNow();
+		}
 	}
 
 	private FlowExecutor loadAndExecuteVersionOne() {
