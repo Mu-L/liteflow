@@ -549,6 +549,7 @@
 				<module>liteflow-core</module>
 				<module>liteflow-script-plugin</module>
 				<module>liteflow-rule-plugin</module>
+				<module>liteflow-rule-db</module>
 				<module>liteflow-spring-boot-starter</module>
 				<module>liteflow-spring</module>
 				<module>liteflow-solon-plugin</module>
@@ -572,6 +573,7 @@
 				<module>liteflow-core</module>
 				<module>liteflow-script-plugin</module>
 				<module>liteflow-rule-plugin</module>
+				<module>liteflow-rule-db</module>
 				<module>liteflow-spring-boot-starter</module>
 				<module>liteflow-spring-boot4-starter</module>
 				<module>liteflow-spring</module>
@@ -590,6 +592,7 @@
 				<module>liteflow-core</module>
 				<module>liteflow-script-plugin</module>
 				<module>liteflow-rule-plugin</module>
+				<module>liteflow-rule-db</module>
 				<module>liteflow-spring-boot-starter</module>
 				<module>liteflow-spring</module>
 				<module>liteflow-solon-plugin</module>
