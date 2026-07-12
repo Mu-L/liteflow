@@ -141,6 +141,13 @@ final class LegacyRuleChangeSource implements RuleChangeSource, ManualPollingCha
 				LOG.warn("legacy rule-db change delivery failed: {}", e.getMessage());
 				return;
 			}
+			long batchMaxSeq = batchMaxSeq(batch);
+			if (RuleDbRuntime.LAST_APPLIED_SEQ.get() < batchMaxSeq) {
+				markDegraded(new RuntimeException("legacy change batch was not applied through seq " + batchMaxSeq));
+				LOG.warn("legacy rule-db change batch remains queued because applied cursor is {} but batch ends at {}",
+						RuleDbRuntime.LAST_APPLIED_SEQ.get(), batchMaxSeq);
+				return;
+			}
 			synchronized (monitor) {
 				for (ChangeRecord change : batch) {
 					if (change != null) {
@@ -156,13 +163,19 @@ final class LegacyRuleChangeSource implements RuleChangeSource, ManualPollingCha
 	@Override
 	public void pollOnce() {
 		long since;
+		boolean retryBuffered;
 		synchronized (monitor) {
 			if (closed || !activated) {
 				return;
 			}
 			since = cursor;
+			retryBuffered = !buffered.isEmpty();
 		}
 		try {
+			if (retryBuffered) {
+				drain();
+				return;
+			}
 			if (repository.fetchLatestSeq() <= since) {
 				synchronized (monitor) {
 					health = health.successful(cursor);
@@ -182,6 +195,16 @@ final class LegacyRuleChangeSource implements RuleChangeSource, ManualPollingCha
 			markDegraded(e);
 			LOG.warn("legacy rule-db poll failed: {}", e.getMessage());
 		}
+	}
+
+	private long batchMaxSeq(List<ChangeRecord> batch) {
+		long max = 0;
+		for (ChangeRecord change : batch) {
+			if (change != null) {
+				max = Math.max(max, change.getSeq());
+			}
+		}
+		return max;
 	}
 
 	private void startPolling() {
