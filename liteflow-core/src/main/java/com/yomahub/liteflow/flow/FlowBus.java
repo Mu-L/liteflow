@@ -23,6 +23,7 @@ import com.yomahub.liteflow.core.proxy.LiteFlowProxyUtil;
 import com.yomahub.liteflow.enums.FlowParserTypeEnum;
 import com.yomahub.liteflow.enums.NodeTypeEnum;
 import com.yomahub.liteflow.enums.ParseModeEnum;
+import com.yomahub.liteflow.exception.ChainLoadException;
 import com.yomahub.liteflow.exception.ComponentCannotRegisterException;
 import com.yomahub.liteflow.exception.NodeIdUnIllegalException;
 import com.yomahub.liteflow.exception.NullNodeTypeException;
@@ -272,10 +273,12 @@ public class FlowBus {
 
 	public static void compileScriptNode(Node node) {
 		boolean ruleDbActive = com.yomahub.liteflow.repository.RuleDbRuntime.isActive();
+		boolean ruleDbManaged = ruleDbActive
+				&& com.yomahub.liteflow.repository.RuleDbRuntime.scriptState(node.getId()) != null;
 		String nodeId = node.getId(), name = node.getName();
-        try {
+		try {
 			// Rule-DB 模式：脚本影子/失效先回源填 script（传 node 本体：EL 编译期会 clone Node）
-			if (ruleDbActive){
+			if (ruleDbManaged){
 				com.yomahub.liteflow.repository.RuleDbRuntime.ensureScriptLoaded(node);
 			}
 			String script = node.getScript(), language = node.getLanguage();
@@ -284,11 +287,19 @@ public class FlowBus {
 
 			NodeComponent cmpInstance = cmpInstanceList.get(0);
 
-			addCompiledNode2Map(node, nodeId, script, language, type, cmpInstance);
-			com.yomahub.liteflow.repository.RuleDbRuntime.recordCompiledScript(node);
-        } catch (Exception e) {
-			if (ruleDbActive) {
-				com.yomahub.liteflow.repository.RuleDbRuntime.markScriptLoadFailed(nodeId, e);
+			loadCompiledNode(node, nodeId, script, language, type, cmpInstance);
+			if (ruleDbManaged) {
+				com.yomahub.liteflow.repository.RuleDbRuntime.recordCompiledScript(node);
+				if (!node.isCompiled()) {
+					throw new ChainLoadException(StrUtil.format("script node[{}] changed or was deleted while compiling", nodeId));
+				}
+			} else {
+				put2NodeMap(StrUtil.isEmpty(cmpInstance.getNodeId()) ? nodeId : cmpInstance.getNodeId(), node);
+			}
+			addFallbackNode(node);
+		} catch (Exception e) {
+			if (ruleDbManaged) {
+				com.yomahub.liteflow.repository.RuleDbRuntime.markScriptLoadFailed(node, e);
 			}
 			String error = StrUtil.format("component[{}] register error", StrUtil.isEmpty(name) ? nodeId : StrUtil.format("{}({})", nodeId, name));
 			LOG.error(e.getMessage());
@@ -297,6 +308,13 @@ public class FlowBus {
     }
 
 	private static void addCompiledNode2Map(Node node, String nodeId, String script, String language, NodeTypeEnum type, NodeComponent cmpInstance) {
+		loadCompiledNode(node, nodeId, script, language, type, cmpInstance);
+		String activeNodeId = StrUtil.isEmpty(cmpInstance.getNodeId()) ? nodeId : cmpInstance.getNodeId();
+		put2NodeMap(activeNodeId, node);
+		addFallbackNode(node);
+	}
+
+	private static void loadCompiledNode(Node node, String nodeId, String script, String language, NodeTypeEnum type, NodeComponent cmpInstance) {
 		// 如果是脚本节点，则还要加载script脚本
 		if (type.isScript()) {
 			if (StrUtil.isNotBlank(script)) {
@@ -310,9 +328,6 @@ public class FlowBus {
 				throw new ScriptLoadException(errorMsg);
 			}
 		}
-		String activeNodeId = StrUtil.isEmpty(cmpInstance.getNodeId()) ? nodeId : cmpInstance.getNodeId();
-		put2NodeMap(activeNodeId, node);
-		addFallbackNode(node);
 	}
 
 	// 如果是spring自动扫描的组件，在addManagedNode方法中就已经完成了组装了
@@ -441,6 +456,20 @@ public class FlowBus {
 		}
 	}
 
+	public static boolean replaceChain(String chainId, Chain expected, Chain replacement) {
+		return chainMap.replace(chainId, expected, replacement);
+	}
+
+	public static boolean removeChain(String chainId, Chain expected) {
+		if (expected == null || !chainMap.remove(chainId, expected)) {
+			return false;
+		}
+		if (expected.getElMd5() != null) {
+			elMd5Map.remove(expected.getElMd5(), chainId);
+		}
+		return true;
+	}
+
 	public static void removeChain(String... chainIds) {
 		Arrays.stream(chainIds).forEach(FlowBus::removeChain);
 	}
@@ -448,6 +477,14 @@ public class FlowBus {
 	// 移除节点
 	public static boolean removeNode(String nodeId) {
 		return nodeMap.remove(nodeId) != null;
+	}
+
+	public static boolean removeNode(String nodeId, Node expected) {
+		return expected != null && nodeMap.remove(nodeId, expected);
+	}
+
+	public static boolean replaceNode(String nodeId, Node expected, Node replacement) {
+		return nodeMap.replace(nodeId, expected, replacement);
 	}
 
 	// 判断是否是降级组件，如果是则添加到 fallbackNodeMap

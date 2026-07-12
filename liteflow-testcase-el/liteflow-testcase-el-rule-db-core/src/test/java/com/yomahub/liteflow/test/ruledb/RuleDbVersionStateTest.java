@@ -202,6 +202,155 @@ public class RuleDbVersionStateTest extends BaseRuleDbTest {
 		Assertions.assertFalse(FlowBus.containNode("lateScript"));
 	}
 
+	@Test
+	public void testRecreatedChainSurvivesOldCompiledCallback() {
+		InMemoryRuleRepository.publishChain("raceChain", "THEN(a, b)");
+		buildExecutor(new RuleDbConfig());
+		Chain oldChain = FlowBus.getChain("raceChain");
+		RuleTargetState oldState = RuleDbRuntime.chainState("raceChain");
+		oldState.markLoaded(oldState.getDesiredVersion(), oldState.getDesiredMd5());
+
+		InMemoryRuleRepository.deleteChain("raceChain");
+		RuleDbRuntime.applyChange(lastChange());
+		InMemoryRuleRepository.publishChain("raceChain", "THEN(b, a)");
+		RuleDbRuntime.applyChange(lastChange());
+		Chain newShadow = FlowBus.getChain("raceChain");
+		RuleTargetState newState = RuleDbRuntime.chainState("raceChain");
+
+		FlowBus.getChainMap().put("raceChain", oldChain);
+		RuleDbRuntime.recordCompiledChain(oldChain);
+
+		Assertions.assertSame(newShadow, FlowBus.getChain("raceChain"));
+		Assertions.assertEquals(RuleTargetStatus.SHADOW, newState.getStatus());
+		Assertions.assertEquals(1L, newState.getDesiredVersion());
+		Assertions.assertDoesNotThrow(RuleDbSyncManager::reconcileOnce);
+	}
+
+	@Test
+	public void testRecreatedScriptSurvivesOldCompiledCallback() {
+		InMemoryRuleRepository.publishScript("raceScript", "defaultContext.setData(\"race\", 1);", "script", "groovy");
+		buildExecutor(new RuleDbConfig());
+		Node oldScript = FlowBus.getNode("raceScript");
+		RuleTargetState oldState = RuleDbRuntime.scriptState("raceScript");
+		oldState.markLoaded(oldState.getDesiredVersion(), oldState.getDesiredMd5());
+
+		InMemoryRuleRepository.deleteScript("raceScript");
+		RuleDbRuntime.applyChange(lastChange());
+		InMemoryRuleRepository.publishScript("raceScript", "defaultContext.setData(\"race\", 2);", "script", "groovy");
+		RuleDbRuntime.applyChange(lastChange());
+		Node newShadow = FlowBus.getNode("raceScript");
+		RuleTargetState newState = RuleDbRuntime.scriptState("raceScript");
+
+		FlowBus.getNodeMap().put("raceScript", oldScript);
+		RuleDbRuntime.recordCompiledScript(oldScript);
+
+		Assertions.assertSame(newShadow, FlowBus.getNode("raceScript"));
+		Assertions.assertEquals(RuleTargetStatus.SHADOW, newState.getStatus());
+		Assertions.assertEquals(1L, newState.getDesiredVersion());
+		Assertions.assertDoesNotThrow(RuleDbSyncManager::reconcileOnce);
+	}
+
+	@Test
+	public void testOldChainCallbackDoesNotActivateRecreatedLoadingGeneration() {
+		InMemoryRuleRepository.publishChain("loadingChain", "THEN(a, b)");
+		buildExecutor(new RuleDbConfig());
+		Chain oldChain = FlowBus.getChain("loadingChain");
+		RuleTargetState oldState = RuleDbRuntime.chainState("loadingChain");
+		oldState.markLoaded(oldState.getDesiredVersion(), oldState.getDesiredMd5());
+
+		InMemoryRuleRepository.deleteChain("loadingChain");
+		RuleDbRuntime.applyChange(lastChange());
+		InMemoryRuleRepository.publishChain("loadingChain", "THEN(b, a)");
+		RuleDbRuntime.applyChange(lastChange());
+		Chain newShadow = FlowBus.getChain("loadingChain");
+		RuleTargetState newState = RuleDbRuntime.chainState("loadingChain");
+		newState.markLoaded(newState.getDesiredVersion(), newState.getDesiredMd5());
+
+		FlowBus.getChainMap().put("loadingChain", oldChain);
+		RuleDbRuntime.recordCompiledChain(oldChain);
+
+		Assertions.assertSame(newShadow, FlowBus.getChain("loadingChain"));
+		Assertions.assertEquals(0L, newState.getActiveVersion());
+		Assertions.assertEquals(RuleTargetStatus.LOADING, newState.getStatus());
+	}
+
+	@Test
+	public void testOldScriptCallbackDoesNotActivateRecreatedLoadingGeneration() {
+		InMemoryRuleRepository.publishScript("loadingScript", "defaultContext.setData(\"loading\", 1);", "script", "groovy");
+		buildExecutor(new RuleDbConfig());
+		Node oldScript = FlowBus.getNode("loadingScript");
+		RuleTargetState oldState = RuleDbRuntime.scriptState("loadingScript");
+		oldState.markLoaded(oldState.getDesiredVersion(), oldState.getDesiredMd5());
+
+		InMemoryRuleRepository.deleteScript("loadingScript");
+		RuleDbRuntime.applyChange(lastChange());
+		InMemoryRuleRepository.publishScript("loadingScript", "defaultContext.setData(\"loading\", 2);", "script", "groovy");
+		RuleDbRuntime.applyChange(lastChange());
+		Node newShadow = FlowBus.getNode("loadingScript");
+		RuleTargetState newState = RuleDbRuntime.scriptState("loadingScript");
+		newState.markLoaded(newState.getDesiredVersion(), newState.getDesiredMd5());
+
+		FlowBus.getNodeMap().put("loadingScript", oldScript);
+		RuleDbRuntime.recordCompiledScript(oldScript);
+
+		Assertions.assertSame(newShadow, FlowBus.getNode("loadingScript"));
+		Assertions.assertEquals(0L, newState.getActiveVersion());
+		Assertions.assertEquals(RuleTargetStatus.LOADING, newState.getStatus());
+	}
+
+	@Test
+	public void testCompiledScriptInstallsFromCanonicalShadow() throws CloneNotSupportedException {
+		InMemoryRuleRepository.putScript("installScript", "defaultContext.setData(\"install\", true);", "script", "groovy");
+		buildExecutor(new RuleDbConfig());
+		Node shadow = FlowBus.getNode("installScript");
+		Node compiled = shadow.clone();
+
+		RuleDbRuntime.ensureScriptLoaded(compiled);
+		compiled.setCompiled(true);
+		RuleDbRuntime.recordCompiledScript(compiled);
+
+		Assertions.assertSame(compiled, FlowBus.getNode("installScript"));
+		Assertions.assertEquals(RuleTargetStatus.READY, RuleDbRuntime.scriptState("installScript").getStatus());
+	}
+
+	@Test
+	public void testOldScriptFailureDoesNotMarkRecreatedState() throws CloneNotSupportedException {
+		InMemoryRuleRepository.publishScript("failedScript", "defaultContext.setData(\"failed\", 1);", "script", "groovy");
+		buildExecutor(new RuleDbConfig());
+		Node loadingScript = FlowBus.getNode("failedScript").clone();
+		RuleDbRuntime.ensureScriptLoaded(loadingScript);
+
+		InMemoryRuleRepository.deleteScript("failedScript");
+		RuleDbRuntime.applyChange(lastChange());
+		InMemoryRuleRepository.publishScript("failedScript", "defaultContext.setData(\"failed\", 2);", "script", "groovy");
+		RuleDbRuntime.applyChange(lastChange());
+		RuleTargetState newState = RuleDbRuntime.scriptState("failedScript");
+
+		RuleDbRuntime.markScriptLoadFailed(loadingScript, new IllegalStateException("old load failed"));
+
+		Assertions.assertEquals(RuleTargetStatus.SHADOW, newState.getStatus());
+		Assertions.assertNull(newState.getLastError());
+	}
+
+	@Test
+	public void testOldChainFailureDoesNotMarkRecreatedState() {
+		InMemoryRuleRepository.publishChain("failedChain", "THEN(a, b)");
+		buildExecutor(new RuleDbConfig());
+		Chain loadingChain = FlowBus.getChain("failedChain");
+		RuleDbRuntime.ensureChainLoaded("failedChain");
+
+		InMemoryRuleRepository.deleteChain("failedChain");
+		RuleDbRuntime.applyChange(lastChange());
+		InMemoryRuleRepository.publishChain("failedChain", "THEN(b, a)");
+		RuleDbRuntime.applyChange(lastChange());
+		RuleTargetState newState = RuleDbRuntime.chainState("failedChain");
+
+		RuleDbRuntime.markChainLoadFailed(loadingChain, new IllegalStateException("old load failed"));
+
+		Assertions.assertEquals(RuleTargetStatus.SHADOW, newState.getStatus());
+		Assertions.assertNull(newState.getLastError());
+	}
+
 	private FlowExecutor loadAndExecuteVersionOne() {
 		InMemoryRuleRepository.publishChain("chain1", "THEN(a, b)");
 		registerCommonCmp();
@@ -211,7 +360,11 @@ public class RuleDbVersionStateTest extends BaseRuleDbTest {
 	}
 
 	private void emitLastChange() {
-		provider().emit(InMemoryRuleRepository.CHANGES.get(InMemoryRuleRepository.CHANGES.size() - 1));
+		provider().emit(lastChange());
+	}
+
+	private ChangeRecord lastChange() {
+		return InMemoryRuleRepository.CHANGES.get(InMemoryRuleRepository.CHANGES.size() - 1);
 	}
 
 	private InMemoryRuleDbProvider provider() {

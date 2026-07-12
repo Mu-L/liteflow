@@ -48,6 +48,21 @@ public class RuleDbDeleteTest extends BaseRuleDbTest {
 	}
 
 	@Test
+	public void testDeleteScriptInvalidatesCompiledChainNode() {
+		InMemoryRuleRepository.publishScript("s1", "defaultContext.setData(\"s1\", true);", "script", "groovy");
+		InMemoryRuleRepository.publishChain("chainS", "THEN(a, s1)");
+		registerCommonCmp();
+		FlowExecutor executor = buildExecutor(new RuleDbConfig());
+		Assertions.assertTrue(executor.execute2Resp("chainS", "arg").isSuccess());
+
+		InMemoryRuleRepository.deleteScript("s1");
+		RuleDbSyncManager.pollOnce();
+
+		Assertions.assertNull(FlowBus.getNode("s1"));
+		Assertions.assertFalse(executor.execute2Resp("chainS", "arg").isSuccess());
+	}
+
+	@Test
 	public void testDeleteScriptWhileChainDropsReference() {
 		InMemoryRuleRepository.publishScript("s1", "defaultContext.setData(\"s1\", true);", "script", "groovy");
 		InMemoryRuleRepository.publishChain("chainS", "THEN(a, s1)");

@@ -52,6 +52,8 @@ public class RuleDbRuntime {
 	/** Shadow objects registered by this runtime, used to avoid removing application-owned metadata. */
 	private static final Map<String, Chain> SHADOW_CHAINS = new ConcurrentHashMap<>();
 	private static final Map<String, Node> SHADOW_SCRIPTS = new ConcurrentHashMap<>();
+	private static final Map<Chain, RuleTargetState> CHAIN_LOAD_STATES = new ConcurrentHashMap<>();
+	private static final Map<Node, RuleTargetState> SCRIPT_LOAD_STATES = new ConcurrentHashMap<>();
 
 	static final AtomicLong LAST_APPLIED_SEQ = new AtomicLong(0);
 
@@ -238,6 +240,9 @@ public class RuleDbRuntime {
 			return; // 非 rule-db 管理的 chain（如手动 build），不干预
 		}
 		Chain chain = FlowBus.getChain(chainId);
+		if (chain != null) {
+			CHAIN_LOAD_STATES.put(chain, state);
+		}
 		if (chain != null && StrUtil.isNotBlank(chain.getEl())
 				&& (state.getStatus() == RuleTargetStatus.READY || state.isDesiredLoaded())) {
 			return; // EL 已在手且版本一致
@@ -247,8 +252,9 @@ public class RuleDbRuntime {
 			throw new ChainLoadException(StrUtil.format("chain[{}] not found or disabled in rule repository", chainId));
 		}
 		if (!state.isGenerationCurrent(record.getVersion(), record.getMd5())) {
-			if (state.isDeleted()) {
-				removeOwnedChain(chainId);
+			if (state.isDeleted() && chain != null) {
+				SHADOW_CHAINS.remove(chainId, chain);
+				restoreOrRemoveLateChain(chainId, chain);
 			}
 			throw new ChainLoadException(StrUtil.format("chain[{}] changed or was deleted while loading", chainId));
 		}
@@ -270,8 +276,9 @@ public class RuleDbRuntime {
 		}
 		chain.setCompiled(false);
 		if (!state.markLoaded(record.getVersion(), record.getMd5())) {
-			if (state.isDeleted()) {
-				removeOwnedChain(chainId);
+			if (state.isDeleted() && chain != null) {
+				SHADOW_CHAINS.remove(chainId, chain);
+				restoreOrRemoveLateChain(chainId, chain);
 			}
 			throw new ChainLoadException(StrUtil.format("chain[{}] changed or was deleted while loading", chainId));
 		}
@@ -286,10 +293,13 @@ public class RuleDbRuntime {
 	public static void ensureScriptLoaded(Node node) {
 		String nodeId = node.getId();
 		RuleTargetState state = SCRIPT_STATES.get(nodeId);
-		if (!isLive(state)) {
+		if (state == null) {
 			return;
 		}
-		SHADOW_SCRIPTS.put(nodeId, node);
+		if (state.isDeleted()) {
+			throw new ChainLoadException(StrUtil.format("script node[{}] was deleted from rule repository", nodeId));
+		}
+		SCRIPT_LOAD_STATES.put(node, state);
 		if (StrUtil.isNotBlank(node.getScript())
 				&& (state.getStatus() == RuleTargetStatus.READY || state.isDesiredLoaded())) {
 			return;
@@ -300,7 +310,8 @@ public class RuleDbRuntime {
 		}
 		if (!state.isGenerationCurrent(record.getVersion(), record.getMd5())) {
 			if (state.isDeleted()) {
-				removeOwnedScript(nodeId);
+				SHADOW_SCRIPTS.remove(nodeId, node);
+				restoreOrRemoveLateScript(nodeId, node);
 			}
 			throw new ChainLoadException(StrUtil.format("script node[{}] changed or was deleted while loading", nodeId));
 		}
@@ -308,7 +319,8 @@ public class RuleDbRuntime {
 		node.setLanguage(record.getLanguage());
 		if (!state.markLoaded(record.getVersion(), record.getMd5())) {
 			if (state.isDeleted()) {
-				removeOwnedScript(nodeId);
+				SHADOW_SCRIPTS.remove(nodeId, node);
+				restoreOrRemoveLateScript(nodeId, node);
 			}
 			throw new ChainLoadException(StrUtil.format("script node[{}] changed or was deleted while loading", nodeId));
 		}
@@ -400,11 +412,32 @@ public class RuleDbRuntime {
 
 	private static void recordCompiledChain(String chainId, Chain compiledChain) {
 		RuleTargetState state = CHAIN_STATES.get(chainId);
+		RuleTargetState loadState = compiledChain == null ? null : CHAIN_LOAD_STATES.remove(compiledChain);
+		if (loadState != null && loadState != state) {
+			if (compiledChain != null) {
+				compiledChain.setCompiled(false);
+				restoreOrRemoveLateChain(chainId, compiledChain);
+			}
+			return;
+		}
+		if (state != null && !state.isDeleted() && compiledChain != SHADOW_CHAINS.get(chainId)) {
+			if (compiledChain != null) {
+				compiledChain.setCompiled(false);
+				restoreOrRemoveLateChain(chainId, compiledChain);
+			}
+			return;
+		}
 		if (state != null && !state.activateLoaded()) {
 			if (state.isDeleted()) {
-				removeOwnedChain(chainId, compiledChain);
+				if (compiledChain == null) {
+					removeOwnedChain(chainId);
+				} else {
+					SHADOW_CHAINS.remove(chainId, compiledChain);
+					restoreOrRemoveLateChain(chainId, compiledChain);
+				}
 			} else if (compiledChain != null) {
 				compiledChain.setCompiled(false);
+				restoreOrRemoveLateChain(chainId, compiledChain);
 			}
 			return;
 		}
@@ -430,21 +463,54 @@ public class RuleDbRuntime {
 		}
 	}
 
-	private static void recordCompiledScript(String nodeId, Node compiledNode) {
+	private static synchronized void recordCompiledScript(String nodeId, Node compiledNode) {
 		RuleTargetState state = SCRIPT_STATES.get(nodeId);
-		if (state != null && !state.activateLoaded()) {
-			if (state.isDeleted()) {
-				removeOwnedScript(nodeId, compiledNode);
-			} else if (compiledNode != null) {
+		RuleTargetState loadState = compiledNode == null ? null : SCRIPT_LOAD_STATES.get(compiledNode);
+		if (state != null && (loadState != state || state.isDeleted())) {
+			if (compiledNode != null) {
+				SCRIPT_LOAD_STATES.remove(compiledNode, loadState);
 				compiledNode.setCompiled(false);
+				restoreOrRemoveLateScript(nodeId, compiledNode);
 			}
 			return;
 		}
+		if (state == null || compiledNode == null) {
+			return;
+		}
+		Node owned = SHADOW_SCRIPTS.get(nodeId);
+		if (!state.isDesiredLoaded() || owned == null || FlowBus.getNode(nodeId) != owned
+				|| (owned != compiledNode && !FlowBus.replaceNode(nodeId, owned, compiledNode))) {
+			SCRIPT_LOAD_STATES.remove(compiledNode, loadState);
+			compiledNode.setCompiled(false);
+			restoreOrRemoveLateScript(nodeId, compiledNode);
+			return;
+		}
+		if (owned != compiledNode && !SHADOW_SCRIPTS.replace(nodeId, owned, compiledNode)) {
+			FlowBus.replaceNode(nodeId, compiledNode, owned);
+			SCRIPT_LOAD_STATES.remove(compiledNode, loadState);
+			compiledNode.setCompiled(false);
+			return;
+		}
+		if (!state.activateLoaded()) {
+			SHADOW_SCRIPTS.replace(nodeId, compiledNode, owned);
+			FlowBus.replaceNode(nodeId, compiledNode, owned);
+			SCRIPT_LOAD_STATES.remove(compiledNode, loadState);
+			compiledNode.setCompiled(false);
+			return;
+		}
+		SCRIPT_LOAD_STATES.remove(compiledNode, loadState);
 	}
 
 	public static void markChainLoadFailed(String chainId, Throwable error) {
-		RuleTargetState state = CHAIN_STATES.get(chainId);
-		if (state != null) {
+		markChainLoadFailed(FlowBus.getChain(chainId), error);
+	}
+
+	public static void markChainLoadFailed(Chain chain, Throwable error) {
+		if (chain == null) {
+			return;
+		}
+		RuleTargetState state = CHAIN_LOAD_STATES.remove(chain);
+		if (state != null && CHAIN_STATES.get(chain.getChainId()) == state) {
 			state.markFailed(error);
 		}
 	}
@@ -456,6 +522,15 @@ public class RuleDbRuntime {
 		}
 	}
 
+	public static void markScriptLoadFailed(Node node, Throwable error) {
+		if (node != null) {
+			RuleTargetState state = SCRIPT_LOAD_STATES.remove(node);
+			if (state != null && SCRIPT_STATES.get(node.getId()) == state) {
+				state.markFailed(error);
+			}
+		}
+	}
+
 	public static boolean isChainStale(String chainId) {
 		RuleTargetState state = CHAIN_STATES.get(chainId);
 		return isLive(state) && state.getStatus() == RuleTargetStatus.STALE;
@@ -463,7 +538,7 @@ public class RuleDbRuntime {
 
 	public static boolean isScriptStale(String nodeId) {
 		RuleTargetState state = SCRIPT_STATES.get(nodeId);
-		return isLive(state) && state.getStatus() == RuleTargetStatus.STALE;
+		return state != null && (state.getStatus() == RuleTargetStatus.STALE || state.isDeleted());
 	}
 
 	// ---- 索引/缓存态操作，供 Task 4/5 的 Cache/SyncManager 使用 ----
@@ -550,7 +625,7 @@ public class RuleDbRuntime {
 	 * - DELETE：移除索引 + 缓存态 + FlowBus 中的条目。
 	 * 由 {@link RuleDbSyncManager} 的轮询/订阅路径回调。
 	 */
-	public static void applyChange(ChangeRecord change) {
+	public static synchronized void applyChange(ChangeRecord change) {
 		String id = change.getTargetId();
 		long version = change.getVersion();
 		if (change.getTargetType() == ChangeRecord.TargetType.CHAIN) {
@@ -613,7 +688,7 @@ public class RuleDbRuntime {
 	 * 新增 script（索引中无）登记影子。
 	 * 由 {@link RuleDbSyncManager#reconcileOnce()} 回调。
 	 */
-	public static void reconcile(RuleManifest manifest) {
+	public static synchronized void reconcile(RuleManifest manifest) {
 		validateManifest(manifest);
 		validateManifestOwnership(manifest);
 		Set<String> liveChains = new HashSet<>();
@@ -730,27 +805,39 @@ public class RuleDbRuntime {
 				+ "] collides with application-owned FlowBus metadata");
 	}
 
-	private static void removeOwnedChain(String chainId) {
-		removeOwnedChain(chainId, null);
+	private static void restoreOrRemoveLateChain(String chainId, Chain lateInstalled) {
+		Chain owned = SHADOW_CHAINS.get(chainId);
+		if (owned != null && owned != lateInstalled && isLive(CHAIN_STATES.get(chainId))) {
+			FlowBus.replaceChain(chainId, lateInstalled, owned);
+		} else {
+			FlowBus.removeChain(chainId, lateInstalled);
+		}
 	}
 
-	private static void removeOwnedChain(String chainId, Chain lateInstalled) {
+	private static void restoreOrRemoveLateScript(String nodeId, Node lateInstalled) {
+		Node owned = SHADOW_SCRIPTS.get(nodeId);
+		if (owned != null && owned != lateInstalled && isLive(SCRIPT_STATES.get(nodeId))) {
+			FlowBus.replaceNode(nodeId, lateInstalled, owned);
+		} else {
+			FlowBus.removeNode(nodeId, lateInstalled);
+		}
+	}
+
+	private static void removeOwnedChain(String chainId) {
 		Chain owned = SHADOW_CHAINS.remove(chainId);
-		Chain current = FlowBus.getChain(chainId);
-		if (current != null && (current == owned || current == lateInstalled)) {
-			FlowBus.removeChain(chainId);
+		if (owned != null) {
+			FlowBus.removeChain(chainId, owned);
 		}
 	}
 
 	private static void removeOwnedScript(String nodeId) {
-		removeOwnedScript(nodeId, null);
-	}
-
-	private static void removeOwnedScript(String nodeId, Node lateInstalled) {
+		LiteflowMetaOperator.getNodesInAllChain(nodeId).forEach(node -> {
+			node.setScript(null);
+			node.setCompiled(false);
+		});
 		Node owned = SHADOW_SCRIPTS.remove(nodeId);
-		Node current = FlowBus.getNode(nodeId);
-		if (current != null && (current == owned || current == lateInstalled)) {
-			FlowBus.unloadScriptNode(nodeId);
+		if (owned != null) {
+			FlowBus.removeNode(nodeId, owned);
 		}
 	}
 
@@ -776,6 +863,8 @@ public class RuleDbRuntime {
 		}
 		SHADOW_CHAINS.clear();
 		SHADOW_SCRIPTS.clear();
+		CHAIN_LOAD_STATES.clear();
+		SCRIPT_LOAD_STATES.clear();
 		CHAIN_STATES.clear();
 		SCRIPT_STATES.clear();
 		LAST_APPLIED_SEQ.set(0);

@@ -350,7 +350,7 @@ public class LiteFlowChainELBuilder {
 			}
 		} catch (RuntimeException e) {
 			if (ruleDbActive) {
-				com.yomahub.liteflow.repository.RuleDbRuntime.markChainLoadFailed(chain.getChainId(), e);
+				com.yomahub.liteflow.repository.RuleDbRuntime.markChainLoadFailed(chain, e);
 			}
 			throw e;
 		}
