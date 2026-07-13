@@ -4,6 +4,7 @@ import cn.hutool.core.util.StrUtil;
 import com.yomahub.liteflow.exception.ConfigErrorException;
 import com.yomahub.liteflow.property.LiteflowConfigGetter;
 import com.yomahub.liteflow.property.RuleDbConfig;
+import com.yomahub.liteflow.property.RuleDbSqlConfig;
 import com.yomahub.liteflow.spi.holder.ContextAwareHolder;
 
 import javax.sql.DataSource;
@@ -11,33 +12,51 @@ import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.SQLException;
 
-/**
- * SQL 连接获取：优先复用容器 DataSource（datasource-bean-name 指定或自动查找），
- * 否则用 url/username/password 直连。
- *
- * @author Bryan.Zhang
- * @since 2.16.1
- */
+/** Resolves SQL connections for one execution provider or publisher instance. */
 public class SqlConnectionManager {
 
+	private final RuleDbSqlConfig executionConfig;
+	private final SqlPublisherConfig publisherConfig;
+	private final boolean dynamicExecutionConfig;
+
 	private volatile DataSource dataSource;
+	private volatile boolean resolved;
 
-	private volatile boolean resolved = false;
-
-	public Connection getConnection() throws SQLException {
-		RuleDbConfig cfg = LiteflowConfigGetter.get().getRuleDb();
-		DataSource ds = resolveDataSource(cfg);
-		if (ds != null) {
-			return ds.getConnection();
-		}
-		if (StrUtil.isBlank(cfg.getUrl())) {
-			throw new ConfigErrorException("rule-db sql: neither a DataSource bean nor liteflow.rule-db.url is available");
-		}
-		loadDriverIfNeeded(cfg);
-		return DriverManager.getConnection(cfg.getUrl(), cfg.getUsername(), cfg.getPassword());
+	public SqlConnectionManager() {
+		this.executionConfig = null;
+		this.publisherConfig = null;
+		this.dynamicExecutionConfig = true;
 	}
 
-	private DataSource resolveDataSource(RuleDbConfig cfg) {
+	SqlConnectionManager(RuleDbSqlConfig config) {
+		this.executionConfig = config;
+		this.publisherConfig = null;
+		this.dynamicExecutionConfig = false;
+	}
+
+	SqlConnectionManager(SqlPublisherConfig config) {
+		this.executionConfig = null;
+		this.publisherConfig = config;
+		this.dynamicExecutionConfig = false;
+		this.dataSource = config.getDataSource();
+		this.resolved = true;
+	}
+
+	public Connection getConnection() throws SQLException {
+		DataSource resolvedDataSource = resolveDataSource();
+		if (resolvedDataSource != null) {
+			return resolvedDataSource.getConnection();
+		}
+		String url = url();
+		if (StrUtil.isBlank(url)) {
+			throw new ConfigErrorException(
+					"rule-db sql: neither a DataSource nor liteflow.rule-db.sql.url is available");
+		}
+		loadDriverIfNeeded(url);
+		return DriverManager.getConnection(url, username(), password());
+	}
+
+	private DataSource resolveDataSource() {
 		if (resolved) {
 			return dataSource;
 		}
@@ -45,9 +64,8 @@ public class SqlConnectionManager {
 			if (resolved) {
 				return dataSource;
 			}
-			// url 显式配置时优先直连，不夺容器 DataSource
-			if (StrUtil.isBlank(cfg.getUrl())) {
-				dataSource = lookupDataSourceBean(cfg.getDatasourceBeanName());
+			if (publisherConfig == null && StrUtil.isBlank(url())) {
+				dataSource = lookupDataSourceBean(execution().getDatasourceBeanName());
 			}
 			resolved = true;
 			return dataSource;
@@ -60,38 +78,65 @@ public class SqlConnectionManager {
 				return ContextAwareHolder.loadContextAware().getBean(beanName);
 			}
 			return ContextAwareHolder.loadContextAware().getBean(DataSource.class);
-		} catch (Exception e) {
+		}
+		catch (Exception e) {
 			return null;
 		}
 	}
 
-	private void loadDriverIfNeeded(RuleDbConfig cfg) {
-		String driver = cfg.getDriverClassName();
+	private void loadDriverIfNeeded(String url) {
+		String driver = driverClassName();
 		if (StrUtil.isBlank(driver)) {
-			driver = guessDriver(cfg.getUrl());
+			driver = guessDriver(url);
 		}
 		if (StrUtil.isNotBlank(driver)) {
 			try {
 				Class.forName(driver);
-			} catch (ClassNotFoundException e) {
+			}
+			catch (ClassNotFoundException e) {
 				throw new ConfigErrorException("rule-db sql: driver class not found: " + driver);
 			}
 		}
 	}
 
-	private String guessDriver(String url) {
-		if (url == null) {
+	private String url() {
+		return publisherConfig == null ? execution().getUrl() : publisherConfig.getUrl();
+	}
+
+	private String username() {
+		return publisherConfig == null ? execution().getUsername() : publisherConfig.getUsername();
+	}
+
+	private String password() {
+		return publisherConfig == null ? execution().getPassword() : publisherConfig.getPassword();
+	}
+
+	private String driverClassName() {
+		return publisherConfig == null
+				? execution().getDriverClassName() : publisherConfig.getDriverClassName();
+	}
+
+	private RuleDbSqlConfig execution() {
+		if (!dynamicExecutionConfig) {
+			return executionConfig;
+		}
+		RuleDbConfig config = LiteflowConfigGetter.get().getRuleDb();
+		return config == null || config.getSql() == null ? new RuleDbSqlConfig() : config.getSql();
+	}
+
+	private String guessDriver(String jdbcUrl) {
+		if (jdbcUrl == null) {
 			return null;
 		}
-		if (url.startsWith("jdbc:mysql")) {
+		if (jdbcUrl.startsWith("jdbc:mysql")) {
 			return "com.mysql.cj.jdbc.Driver";
 		}
-		if (url.startsWith("jdbc:h2")) {
+		if (jdbcUrl.startsWith("jdbc:h2")) {
 			return "org.h2.Driver";
 		}
-		if (url.startsWith("jdbc:postgresql")) {
+		if (jdbcUrl.startsWith("jdbc:postgresql")) {
 			return "org.postgresql.Driver";
 		}
-		return null; // 交给 DriverManager 的 SPI 自发现
+		return null;
 	}
 }

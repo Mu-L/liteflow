@@ -35,8 +35,8 @@ public class SqlMissingTableTest {
 		LiteflowConfig config = new LiteflowConfig();
 		RuleDbConfig ruleDb = new RuleDbConfig();
 		// 全新内存库，无表；不开 auto-init-table
-		ruleDb.setUrl("jdbc:h2:mem:lfNoTables;DB_CLOSE_DELAY=-1");
-		ruleDb.setAutoInitTable(false);
+		ruleDb.getSql().setUrl("jdbc:h2:mem:lfNoTables;DB_CLOSE_DELAY=-1");
+		ruleDb.getSql().setAutoInitTable(false);
 		config.setRuleDb(ruleDb);
 		LiteflowConfigGetter.setLiteflowConfig(config);
 

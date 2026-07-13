@@ -22,15 +22,41 @@ import java.util.List;
  */
 public class SqlRuleRepository implements RuleRepository {
 
-	private final SqlConnectionManager connectionManager = new SqlConnectionManager();
+	private final SqlConnectionManager connectionManager;
 
-	private final SqlDialect dialect = new SqlDialect();
+	private final SqlDialect dialect;
+
+	private final String applicationName;
+
+	private final boolean autoInitTable;
+
+	private final boolean dynamicExecutionConfig;
 
 	private volatile boolean tableChecked = false;
 
+	public SqlRuleRepository() {
+		this.connectionManager = new SqlConnectionManager();
+		this.dialect = new SqlDialect();
+		this.applicationName = null;
+		this.autoInitTable = false;
+		this.dynamicExecutionConfig = true;
+	}
+
+	SqlRuleRepository(SqlConnectionManager connectionManager, SqlDialect dialect,
+			String applicationName, boolean autoInitTable) {
+		this.connectionManager = connectionManager;
+		this.dialect = dialect;
+		this.applicationName = StrUtil.isBlank(applicationName) ? "default" : applicationName;
+		this.autoInitTable = autoInitTable;
+		this.dynamicExecutionConfig = false;
+	}
+
 	private String app() {
-		RuleDbConfig cfg = LiteflowConfigGetter.get().getRuleDb();
-		String name = cfg == null ? null : cfg.getApplicationName();
+		if (!dynamicExecutionConfig) {
+			return applicationName;
+		}
+		RuleDbConfig config = LiteflowConfigGetter.get().getRuleDb();
+		String name = config == null ? null : config.getApplicationName();
 		return StrUtil.isBlank(name) ? "default" : name;
 	}
 
@@ -53,8 +79,7 @@ public class SqlRuleRepository implements RuleRepository {
 		if (tableChecked) {
 			return;
 		}
-		RuleDbConfig cfg = LiteflowConfigGetter.get().getRuleDb();
-		if (cfg != null && Boolean.TRUE.equals(cfg.getAutoInitTable())) {
+		if (autoInitTable()) {
 			try {
 				dialect.createTablesIfAbsent(c);
 			} catch (SQLException e) {
@@ -77,6 +102,8 @@ public class SqlRuleRepository implements RuleRepository {
 		String scriptSql = "SELECT node_id, version, content_md5, script_type, script_language, script_name FROM "
 				+ dialect.scriptTable() + " WHERE application_name = ? AND enable = 1";
 		try (Connection c = conn()) {
+			c.setTransactionIsolation(Connection.TRANSACTION_REPEATABLE_READ);
+			c.setAutoCommit(false);
 			try (PreparedStatement ps = c.prepareStatement(chainSql)) {
 				ps.setString(1, app());
 				try (ResultSet rs = ps.executeQuery()) {
@@ -110,6 +137,7 @@ public class SqlRuleRepository implements RuleRepository {
 					}
 				}
 			}
+			c.commit();
 		} catch (SQLException e) {
 			throw wrap("fetchManifest", e);
 		}
@@ -280,5 +308,14 @@ public class SqlRuleRepository implements RuleRepository {
 
 	private RuntimeException wrap(String op, SQLException e) {
 		return new RuntimeException("rule-db sql " + op + " failed: " + e.getMessage(), e);
+	}
+
+	private boolean autoInitTable() {
+		if (!dynamicExecutionConfig) {
+			return autoInitTable;
+		}
+		RuleDbConfig config = LiteflowConfigGetter.get().getRuleDb();
+		return config != null && config.getSql() != null
+				&& Boolean.TRUE.equals(config.getSql().getAutoInitTable());
 	}
 }

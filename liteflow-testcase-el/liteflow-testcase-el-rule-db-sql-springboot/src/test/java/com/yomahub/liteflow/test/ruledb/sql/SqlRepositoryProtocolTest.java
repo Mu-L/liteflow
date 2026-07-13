@@ -6,7 +6,12 @@ package com.yomahub.liteflow.test.ruledb.sql;
 
 import cn.hutool.crypto.SecureUtil;
 import com.yomahub.liteflow.exception.SeqGapException;
-import com.yomahub.liteflow.repository.sql.SqlRulePublisher;
+import com.yomahub.liteflow.publisher.PublishChainRequest;
+import com.yomahub.liteflow.publisher.PublishScriptRequest;
+import com.yomahub.liteflow.publisher.RemoveRuleRequest;
+import com.yomahub.liteflow.publisher.RulePublisher;
+import com.yomahub.liteflow.publisher.RulePublisherFactory;
+import com.yomahub.liteflow.repository.sql.SqlPublisherConfig;
 import com.yomahub.liteflow.repository.sql.SqlRuleRepository;
 import com.yomahub.liteflow.repository.vo.ChainMeta;
 import com.yomahub.liteflow.repository.vo.ChainRecord;
@@ -44,7 +49,12 @@ public class SqlRepositoryProtocolTest {
 
 	private static final String H2_URL = "jdbc:h2:mem:ruledb;DB_CLOSE_DELAY=-1;MODE=MySQL";
 
-	private final SqlRulePublisher publisher = new SqlRulePublisher();
+	private final RulePublisher publisher = RulePublisherFactory.create(SqlPublisherConfig.builder()
+			.applicationName("ruledb-sql-it")
+			.url(H2_URL)
+			.username("sa")
+			.password("")
+			.build());
 
 	private final SqlRuleRepository repository = new SqlRuleRepository();
 
@@ -52,8 +62,8 @@ public class SqlRepositoryProtocolTest {
 	public void testPublishVersionAndChangeLogProtocol() {
 		long before = repository.fetchLatestSeq();
 
-		long v1 = publisher.publishChain("protoChain", "THEN(a, b)");
-		long v2 = publisher.publishChain("protoChain", "THEN(b, a)");
+		long v1 = publishChain("protoChain", "THEN(a, b)");
+		long v2 = publishChain("protoChain", "THEN(b, a)");
 		Assertions.assertEquals(v1 + 1, v2, "republish must bump version by exactly 1");
 
 		// 内容行以最后一次发布为准，md5 重算
@@ -80,11 +90,11 @@ public class SqlRepositoryProtocolTest {
 
 	@Test
 	public void testRemoveChainClearsRowAndLogsDelete() {
-		long version = publisher.publishChain("protoDelChain", "THEN(a, b)");
+		long version = publishChain("protoDelChain", "THEN(a, b)");
 		Assertions.assertNotNull(repository.fetchChain("protoDelChain"));
 
 		long before = repository.fetchLatestSeq();
-		publisher.removeChain("protoDelChain");
+		publisher.removeChain(RemoveRuleRequest.builder().targetId("protoDelChain").build());
 
 		Assertions.assertNull(repository.fetchChain("protoDelChain"));
 		List<ChangeRecord> changes = repository.fetchChangesSince(before);
@@ -102,11 +112,11 @@ public class SqlRepositoryProtocolTest {
 		s.setType("script");
 		s.setLanguage("groovy");
 		s.setScript("println('bye')");
-		long version = publisher.publishScript(s);
+		long version = publishScript(s);
 		Assertions.assertNotNull(repository.fetchScript("protoDelScript"));
 
 		long before = repository.fetchLatestSeq();
-		publisher.removeScript("protoDelScript");
+		publisher.removeScript(RemoveRuleRequest.builder().targetId("protoDelScript").build());
 
 		Assertions.assertNull(repository.fetchScript("protoDelScript"));
 		List<ChangeRecord> changes = repository.fetchChangesSince(before);
@@ -118,13 +128,13 @@ public class SqlRepositoryProtocolTest {
 
 	@Test
 	public void testManifestListsPublishedEntries() {
-		publisher.publishChain("protoManifestChain", "THEN(a, b)");
+		publishChain("protoManifestChain", "THEN(a, b)");
 		ScriptRecord s = new ScriptRecord();
 		s.setNodeId("protoManifestScript");
 		s.setType("boolean_script");
 		s.setLanguage("groovy");
 		s.setScript("return true");
-		publisher.publishScript(s);
+		publishScript(s);
 
 		RuleManifest m = repository.fetchManifest();
 		Assertions.assertTrue(m.getChains().stream().anyMatch(cm ->
@@ -142,11 +152,11 @@ public class SqlRepositoryProtocolTest {
 	@Test
 	public void testChangeLogCleanupTriggersSeqGap() throws Exception {
 		// 保证 since > 0（断档检测只在非冷启动位点生效）
-		publisher.publishChain("protoGapChain", "THEN(a, b)");
+		publishChain("protoGapChain", "THEN(a, b)");
 		long s0 = repository.fetchLatestSeq();
-		publisher.publishChain("protoGapChain", "THEN(a, b)");
+		publishChain("protoGapChain", "THEN(a, b)");
 		long s1 = repository.fetchLatestSeq();
-		publisher.publishChain("protoGapChain", "THEN(a, b)");
+		publishChain("protoGapChain", "THEN(a, b)");
 
 		// 运维清理旧 change_log：删除 seq <= s1 的记录，制造断档
 		try (Connection c = DriverManager.getConnection(H2_URL, "sa", "");
@@ -163,7 +173,7 @@ public class SqlRepositoryProtocolTest {
 	@Test
 	public void testConcurrentRepublishKeepsVersionAtomic() throws Exception {
 		// 首发单独完成（并发首发同一 id 是文档化的 best-effort，不在此测）；并发重发布走行锁自增
-		publisher.publishChain("protoCcChain", "THEN(a, b)");
+		publishChain("protoCcChain", "THEN(a, b)");
 		long before = repository.fetchLatestSeq();
 
 		int threads = 2, publishesPerThread = 5;
@@ -176,7 +186,7 @@ public class SqlRepositoryProtocolTest {
 				try {
 					start.await();
 					for (int i = 0; i < publishesPerThread; i++) {
-						publisher.publishChain("protoCcChain", "THEN(b, a)");
+						publishChain("protoCcChain", "THEN(b, a)");
 					}
 				} catch (Exception e) {
 					failures.incrementAndGet();
@@ -194,6 +204,21 @@ public class SqlRepositoryProtocolTest {
 				repository.fetchChain("protoCcChain").getVersion());
 		Assertions.assertEquals(threads * publishesPerThread,
 				repository.fetchChangesSince(before).size());
+	}
+
+	private long publishChain(String chainId, String el) {
+		return publisher.publishChain(PublishChainRequest.builder()
+				.chainId(chainId).el(el).build()).getVersion();
+	}
+
+	private long publishScript(ScriptRecord script) {
+		return publisher.publishScript(PublishScriptRequest.builder()
+				.nodeId(script.getNodeId())
+				.script(script.getScript())
+				.name(script.getName())
+				.type(script.getType())
+				.language(script.getLanguage())
+				.build()).getVersion();
 	}
 
 }

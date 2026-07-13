@@ -10,18 +10,26 @@ import java.sql.Connection;
 import java.sql.SQLException;
 import java.sql.Statement;
 
-/**
- * 表名拼装（前缀可配，字段名固定）+ 建表 DDL。
- *
- * @author Bryan.Zhang
- * @since 2.16.1
- */
+/** Table naming and DDL selection for one SQL backend instance. */
 public class SqlDialect {
 
+	private final String configuredPrefix;
+
+	private final boolean dynamicExecutionPrefix;
+
+	public SqlDialect() {
+		this.configuredPrefix = null;
+		this.dynamicExecutionPrefix = true;
+	}
+
+	SqlDialect(String prefix) {
+		this.configuredPrefix = prefix;
+		this.dynamicExecutionPrefix = false;
+	}
+
 	public String prefix() {
-		RuleDbConfig cfg = LiteflowConfigGetter.get().getRuleDb();
-		String p = cfg == null ? null : cfg.getTablePrefix();
-		return StrUtil.isBlank(p) ? "lf_" : p;
+		String prefix = dynamicExecutionPrefix ? executionPrefix() : configuredPrefix;
+		return StrUtil.isBlank(prefix) ? "lf_" : prefix;
 	}
 
 	public String chainTable() {
@@ -36,50 +44,49 @@ public class SqlDialect {
 		return prefix() + "change_log";
 	}
 
-	/** 按连接的数据库产品选择 DDL 资源：MySQL 用 mysql 版（TEXT/KEY 语法），其余用 h2/通用版 */
 	private String ddlResource(Connection conn) {
 		try {
 			String product = conn.getMetaData().getDatabaseProductName();
 			if (product != null && product.toLowerCase().contains("mysql")) {
 				return "sql/ddl-mysql.sql";
 			}
-		} catch (SQLException ignored) {
+		}
+		catch (SQLException ignored) {
 		}
 		return "sql/ddl-h2.sql";
 	}
 
-	/** DDL 文本（缺表报错时给用户复制执行） */
 	public String ddlText(Connection conn) {
-		return applyPrefix(ResourceUtil.readUtf8Str(ddlResource(conn)));
+		return ResourceUtil.readUtf8Str(ddlResource(conn)).replace("${prefix}", prefix());
 	}
 
-	private String applyPrefix(String tpl) {
-		return tpl.replace("${prefix}", prefix());
-	}
-
-	/** auto-init-table=true 时建表 */
 	public void createTablesIfAbsent(Connection conn) throws SQLException {
 		String ddl = ddlText(conn);
-		try (Statement st = conn.createStatement()) {
-			for (String stmt : ddl.split(";")) {
-				if (StrUtil.isNotBlank(stmt)) {
-					st.execute(stmt);
+		try (Statement statement = conn.createStatement()) {
+			for (String item : ddl.split(";")) {
+				if (StrUtil.isNotBlank(item)) {
+					statement.execute(item);
 				}
 			}
 		}
 	}
 
-	/** 未开 auto-init-table 时探测三张表；缺表抛 ConfigErrorException，附完整可复制执行的 DDL（spec §9） */
 	public void checkTablesExist(Connection conn) {
-		for (String table : new String[] {chainTable(), scriptTable(), changeLogTable()}) {
-			try (Statement st = conn.createStatement()) {
-				st.executeQuery("SELECT 1 FROM " + table + " WHERE 1=0");
-			} catch (SQLException e) {
+		for (String table : new String[] { chainTable(), scriptTable(), changeLogTable() }) {
+			try (Statement statement = conn.createStatement()) {
+				statement.executeQuery("SELECT 1 FROM " + table + " WHERE 1=0");
+			}
+			catch (SQLException e) {
 				throw new ConfigErrorException(StrUtil.format(
 						"rule-db sql: table [{}] not found ({}). Create the tables with the DDL below, "
-								+ "or set liteflow.rule-db.auto-init-table=true:\n{}",
+								+ "or set liteflow.rule-db.sql.auto-init-table=true:\n{}",
 						table, e.getMessage(), ddlText(conn)));
 			}
 		}
+	}
+
+	private static String executionPrefix() {
+		RuleDbConfig config = LiteflowConfigGetter.get().getRuleDb();
+		return config == null || config.getSql() == null ? null : config.getSql().getTablePrefix();
 	}
 }
