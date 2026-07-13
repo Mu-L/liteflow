@@ -32,6 +32,11 @@ public final class EtcdRuleDbProvider implements RuleDbProvider {
 	}
 
 	@Override
+	public String type() {
+		return "etcd";
+	}
+
+	@Override
 	public RuleRepository repository() {
 		return repository;
 	}

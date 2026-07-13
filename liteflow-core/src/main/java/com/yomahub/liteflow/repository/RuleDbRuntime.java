@@ -26,6 +26,7 @@ import com.yomahub.liteflow.repository.vo.ChangeRecord;
 import com.yomahub.liteflow.repository.vo.ChainMeta;
 import com.yomahub.liteflow.repository.vo.ChainRecord;
 import com.yomahub.liteflow.repository.vo.RuleManifest;
+import com.yomahub.liteflow.repository.vo.RuleDbRuntimeSnapshot;
 import com.yomahub.liteflow.repository.vo.ScriptMeta;
 import com.yomahub.liteflow.repository.vo.ScriptRecord;
 import com.yomahub.liteflow.util.ElRegexUtil;
@@ -33,6 +34,7 @@ import com.yomahub.liteflow.script.ScriptExecutorFactory;
 
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.EnumMap;
 import java.util.HashSet;
 import java.util.IdentityHashMap;
 import java.util.List;
@@ -52,6 +54,7 @@ import java.util.concurrent.atomic.AtomicLong;
 public class RuleDbRuntime {
 
 	private static final LFLog LOG = LFLoggerManager.getLogger(RuleDbRuntime.class);
+	private static final int MAX_FAILED_TARGETS = 20;
 
 	/** Per-target desired and active metadata retained independently of the execution cache. */
 	private static final ConcurrentHashMap<String, RuleTargetState> CHAIN_STATES = new ConcurrentHashMap<>();
@@ -941,6 +944,55 @@ public class RuleDbRuntime {
 
 	public static RuleTargetState scriptState(String nodeId) {
 		return SCRIPT_STATES.get(nodeId);
+	}
+
+	/** Returns a bounded diagnostic snapshot without rule or script content. */
+	public static RuleDbRuntimeSnapshot snapshot() {
+		if (!initialized || !RuleDbSyncManager.isOpen()) {
+			return RuleDbRuntimeSnapshot.inactive();
+		}
+		EnumMap<RuleTargetStatus, Integer> counts = new EnumMap<>(RuleTargetStatus.class);
+		for (RuleTargetStatus status : RuleTargetStatus.values()) {
+			counts.put(status, 0);
+		}
+		List<RuleDbRuntimeSnapshot.FailedTarget> failures = new ArrayList<>();
+		collectSnapshotTargets(CHAIN_STATES, ChangeRecord.TargetType.CHAIN, counts, failures);
+		collectSnapshotTargets(SCRIPT_STATES, ChangeRecord.TargetType.SCRIPT, counts, failures);
+		return new RuleDbRuntimeSnapshot(true, RuleDbSyncManager.providerType(),
+				RuleDbSyncManager.changeSourceHealth(), LAST_APPLIED_SEQ.get(),
+				RuleDbSyncManager.lastSuccessfulReconcileTime(), RuleDbSyncManager.lastReconcileError(),
+				counts, failures);
+	}
+
+	private static void collectSnapshotTargets(Map<String, RuleTargetState> states,
+			ChangeRecord.TargetType targetType, Map<RuleTargetStatus, Integer> counts,
+			List<RuleDbRuntimeSnapshot.FailedTarget> failures) {
+		List<String> ids = new ArrayList<>(states.keySet());
+		Collections.sort(ids);
+		for (String id : ids) {
+			RuleTargetState state = states.get(id);
+			if (state == null) {
+				continue;
+			}
+			synchronized (state) {
+				RuleTargetStatus status = state.getStatus();
+				counts.put(status, counts.get(status) + 1);
+				if (status == RuleTargetStatus.FAILED && failures.size() < MAX_FAILED_TARGETS) {
+					failures.add(new RuleDbRuntimeSnapshot.FailedTarget(targetType, id, status,
+							state.getDesiredVersion(), state.getActiveVersion(),
+							errorSummary(state.getLastError())));
+				}
+			}
+		}
+	}
+
+	private static String errorSummary(Throwable error) {
+		if (error == null) {
+			return null;
+		}
+		String message = StrUtil.isBlank(error.getMessage())
+				? error.getClass().getSimpleName() : error.getMessage();
+		return message.length() <= 256 ? message : message.substring(0, 256);
 	}
 
 	static void onChainEvicted(String chainId) {

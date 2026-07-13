@@ -15,6 +15,7 @@ import java.util.Map;
  * <ul>
  *   <li>{@code /actuator/liteflow} —— 全局概览</li>
  *   <li>{@code /actuator/liteflow/chains} / {@code /actuator/liteflow/nodes} —— 列表</li>
+ *   <li>{@code /actuator/liteflow/ruledb} —— Rule-DB 同步健康状态</li>
  *   <li>{@code /actuator/liteflow/chains/{id}} / {@code /actuator/liteflow/nodes/{id}} —— 明细（含指标快照）</li>
  * </ul>
  *
@@ -42,6 +43,9 @@ public class LiteflowEndpoint {
         }
         if ("nodes".equals(level)) {
             return metaView.nodes();
+        }
+        if ("ruledb".equals(level)) {
+            return metaView.ruleDb();
         }
         return metaView.error("unknown selector: " + level);
     }

@@ -32,6 +32,11 @@ public class SqlRuleDbProvider implements RuleDbProvider {
 	}
 
 	@Override
+	public String type() {
+		return "sql";
+	}
+
+	@Override
 	public RuleRepository repository() {
 		return repository;
 	}

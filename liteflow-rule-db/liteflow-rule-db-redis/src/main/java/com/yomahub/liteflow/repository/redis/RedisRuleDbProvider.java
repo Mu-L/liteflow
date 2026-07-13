@@ -31,6 +31,11 @@ public class RedisRuleDbProvider implements RuleDbProvider {
 	}
 
 	@Override
+	public String type() {
+		return "redis";
+	}
+
+	@Override
 	public RuleRepository repository() {
 		return repository;
 	}

@@ -4,6 +4,10 @@ import com.yomahub.liteflow.flow.FlowBus;
 import com.yomahub.liteflow.flow.element.Chain;
 import com.yomahub.liteflow.flow.element.Node;
 import com.yomahub.liteflow.meta.LiteflowMetaOperator;
+import com.yomahub.liteflow.repository.ChangeSourceHealth;
+import com.yomahub.liteflow.repository.RuleDbRuntime;
+import com.yomahub.liteflow.repository.runtime.RuleTargetStatus;
+import com.yomahub.liteflow.repository.vo.RuleDbRuntimeSnapshot;
 import com.yomahub.liteflow.slot.DataBus;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Timer;
@@ -12,6 +16,7 @@ import io.micrometer.core.instrument.search.Search;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
 
@@ -78,6 +83,48 @@ public class LiteflowMetaView {
         }
         m.put("inChains", inChains);
         return m;
+    }
+
+    public Map<String, Object> ruleDb() {
+        RuleDbRuntimeSnapshot snapshot = RuleDbRuntime.snapshot();
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("active", snapshot.isActive());
+        if (!snapshot.isActive()) {
+            return result;
+        }
+        result.put("provider", snapshot.getProvider());
+
+        ChangeSourceHealth source = snapshot.getChangeSource();
+        Map<String, Object> sourceView = new LinkedHashMap<>();
+        sourceView.put("status", source == null ? null : source.getStatus().name());
+        sourceView.put("recentError", source == null ? null : source.getRecentError());
+        sourceView.put("lastSuccessTime", source == null ? 0L : source.getLastSuccessTime());
+        sourceView.put("cursor", source == null ? 0L : source.getCursor());
+        result.put("changeSource", sourceView);
+
+        result.put("lastAppliedSeq", snapshot.getLastAppliedSeq());
+        result.put("lastSuccessfulReconcileTime", snapshot.getLastSuccessfulReconcileTime());
+        result.put("lastReconcileError", snapshot.getLastReconcileError());
+
+        Map<String, Object> targets = new LinkedHashMap<>();
+        for (RuleTargetStatus status : RuleTargetStatus.values()) {
+            targets.put(status.name().toLowerCase(Locale.ROOT), snapshot.getTargetCounts().get(status));
+        }
+        result.put("targets", targets);
+
+        List<Map<String, Object>> failures = new ArrayList<>();
+        for (RuleDbRuntimeSnapshot.FailedTarget target : snapshot.getFailedTargets()) {
+            Map<String, Object> failure = new LinkedHashMap<>();
+            failure.put("targetType", target.getTargetType().name().toLowerCase(Locale.ROOT));
+            failure.put("targetId", target.getTargetId());
+            failure.put("status", target.getStatus().name());
+            failure.put("desiredVersion", target.getDesiredVersion());
+            failure.put("activeVersion", target.getActiveVersion());
+            failure.put("error", target.getError());
+            failures.add(failure);
+        }
+        result.put("failedTargets", failures);
+        return result;
     }
 
     private Map<String, Object> chainBrief(Chain chain) {

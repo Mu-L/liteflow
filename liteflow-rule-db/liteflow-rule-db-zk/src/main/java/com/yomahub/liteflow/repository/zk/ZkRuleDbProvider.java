@@ -26,6 +26,7 @@ public final class ZkRuleDbProvider implements RuleDbProvider {
 		this.changeSource = new ZkCacheChangeSource(connection.client(), paths, codec);
 	}
 
+	@Override public String type() { return "zk"; }
 	@Override public RuleRepository repository() { return repository; }
 	@Override public RuleChangeSource changeSource() { return changeSource; }
 

@@ -35,6 +35,8 @@ public class RuleDbSyncManager {
 	private static volatile RuleDbProvider provider;
 	private static volatile RuleRepository repository;
 	private static volatile RuleChangeSource changeSource;
+	private static volatile long lastSuccessfulReconcileTime;
+	private static volatile String lastReconcileError;
 	private static volatile boolean running;
 
 	private static final RuleChangeListener LISTENER = new RuleChangeListener() {
@@ -71,6 +73,8 @@ public class RuleDbSyncManager {
 		if (nextProvider == null) {
 			throw new IllegalArgumentException("rule-db provider must not be null");
 		}
+		lastSuccessfulReconcileTime = 0L;
+		lastReconcileError = null;
 		RuleRepository nextRepository;
 		RuleChangeSource nextSource;
 		try {
@@ -166,16 +170,24 @@ public class RuleDbSyncManager {
 	}
 
 	private static void reconcileNow() {
-		RuleRepository repo = repository;
-		if (repo == null) {
-			return;
+		try {
+			RuleRepository repo = repository;
+			if (repo == null) {
+				return;
+			}
+			RuleManifest manifest = repo.fetchManifest();
+			RuleDbRuntime.reconcile(manifest);
+			advanceSeq(manifest.getLatestSeq());
+			RuleChangeSource source = changeSource;
+			if (source != null) {
+				source.onReconciled(manifest.getLatestSeq());
+			}
+			lastSuccessfulReconcileTime = System.currentTimeMillis();
+			lastReconcileError = null;
 		}
-		RuleManifest manifest = repo.fetchManifest();
-		RuleDbRuntime.reconcile(manifest);
-		advanceSeq(manifest.getLatestSeq());
-		RuleChangeSource source = changeSource;
-		if (source != null) {
-			source.onReconciled(manifest.getLatestSeq());
+		catch (RuntimeException e) {
+			lastReconcileError = errorSummary(e);
+			throw e;
 		}
 	}
 
@@ -350,6 +362,42 @@ public class RuleDbSyncManager {
 
 	static RuleRepository activeRepository() {
 		return repository;
+	}
+
+	static String providerType() {
+		RuleDbProvider current = provider;
+		return current == null ? null : current.type();
+	}
+
+	static ChangeSourceHealth changeSourceHealth() {
+		RuleChangeSource current = changeSource;
+		if (current == null) {
+			return ChangeSourceHealth.starting();
+		}
+		try {
+			ChangeSourceHealth health = current.health();
+			return health == null ? ChangeSourceHealth.starting() : health;
+		}
+		catch (RuntimeException e) {
+			return ChangeSourceHealth.degraded(errorSummary(e), RuleDbRuntime.LAST_APPLIED_SEQ.get());
+		}
+	}
+
+	static long lastSuccessfulReconcileTime() {
+		return lastSuccessfulReconcileTime;
+	}
+
+	static String lastReconcileError() {
+		return lastReconcileError;
+	}
+
+	private static String errorSummary(Throwable error) {
+		if (error == null) {
+			return null;
+		}
+		String message = StrUtil.isBlank(error.getMessage())
+				? error.getClass().getSimpleName() : error.getMessage();
+		return message.length() <= 512 ? message : message.substring(0, 512);
 	}
 
 	private static void closeQuietly(AutoCloseable closeable) {

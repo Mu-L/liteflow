@@ -3,6 +3,7 @@ package com.yomahub.liteflow.test.metrics;
 import com.yomahub.liteflow.core.FlowExecutor;
 import com.yomahub.liteflow.flow.LiteflowResponse;
 import com.yomahub.liteflow.metrics.LiteflowMetaView;
+import com.yomahub.liteflow.springboot.metrics.LiteflowEndpoint;
 import com.yomahub.liteflow.test.BaseTest;
 import io.micrometer.core.instrument.MeterRegistry;
 import org.junit.jupiter.api.Assertions;
@@ -31,6 +32,9 @@ public class MetricsEndpointSpringbootTest extends BaseTest {
     @Resource
     private LiteflowMetaView liteflowMetaView;
 
+    @Resource
+    private LiteflowEndpoint liteflowEndpoint;
+
     @Test
     public void testChainAndNodeMetricsRecorded() {
         LiteflowResponse response = flowExecutor.execute2Resp("mChain", "arg");
@@ -50,5 +54,12 @@ public class MetricsEndpointSpringbootTest extends BaseTest {
         List<Map<String, Object>> chains = liteflowMetaView.chains();
         boolean found = chains.stream().anyMatch(c -> "mChain".equals(c.get("chainId")));
         Assertions.assertTrue(found);
+    }
+
+    @Test
+    public void testInactiveRuleDbEndpointView() {
+        Map<String, Object> view = (Map<String, Object>) liteflowEndpoint.chains("ruledb");
+        Assertions.assertEquals(Boolean.FALSE, view.get("active"));
+        Assertions.assertEquals(1, view.size());
     }
 }

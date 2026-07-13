@@ -36,6 +36,9 @@ public class LiteflowEndpoint {
         if ("nodes".equals(level)) {
             return metaView.nodes();
         }
+        if ("ruledb".equals(level)) {
+            return metaView.ruleDb();
+        }
         return metaView.error("unknown selector: " + level);
     }
 

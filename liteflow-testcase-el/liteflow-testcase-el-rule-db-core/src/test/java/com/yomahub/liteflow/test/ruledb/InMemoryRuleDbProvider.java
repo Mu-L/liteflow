@@ -36,6 +36,11 @@ public class InMemoryRuleDbProvider implements RuleDbProvider {
     private boolean throwOnClose;
 
     @Override
+    public String type() {
+        return "memory";
+    }
+
+    @Override
     public RuleRepository repository() {
         return repository;
     }
