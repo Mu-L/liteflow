@@ -550,7 +550,7 @@
     {
       "name": "liteflow.rule-db.sync.reconcile-seconds",
       "type": "java.lang.Integer",
-      "description": "Full reconciliation interval (seconds) against the storage engine.",
+      "description": "Manifest reconciliation interval in seconds for all Rule-DB backends. SQL and Redis also poll change logs; etcd and ZooKeeper also watch metadata.",
       "sourceType": "com.yomahub.liteflow.property.RuleDbSyncConfig",
       "defaultValue": 60
     },
