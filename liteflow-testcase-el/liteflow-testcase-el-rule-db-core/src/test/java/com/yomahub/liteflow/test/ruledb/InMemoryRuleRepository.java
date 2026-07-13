@@ -32,12 +32,17 @@ public class InMemoryRuleRepository implements RuleRepository {
     public static final AtomicInteger FETCH_MANIFEST_COUNT = new AtomicInteger(0);
     public static volatile boolean DOWN = false;
     public static volatile long MIN_SEQ = 0;
+    private static volatile Runnable afterNextChainFetch;
 
     public static void reset() {
         CHAINS.clear(); SCRIPTS.clear(); CHANGES.clear();
         SEQ.set(0); FETCH_CHAIN_COUNT.set(0); FETCH_CHAIN_META_COUNT.set(0);
         FETCH_SCRIPT_COUNT.set(0); FETCH_SCRIPT_META_COUNT.set(0); FETCH_MANIFEST_COUNT.set(0);
-        DOWN = false; MIN_SEQ = 0;
+        DOWN = false; MIN_SEQ = 0; afterNextChainFetch = null;
+    }
+
+    public static void afterNextChainFetch(Runnable callback) {
+        afterNextChainFetch = callback;
     }
 
     /** 只放数据不记变更（模拟绕过发布规范的脏写/初始数据） */
@@ -147,7 +152,13 @@ public class InMemoryRuleRepository implements RuleRepository {
         // 先计数再判宕机：计数语义为"尝试次数"，供重试次数断言
         FETCH_CHAIN_COUNT.incrementAndGet();
         checkDown();
-        return CHAINS.get(chainId);
+        ChainRecord record = CHAINS.get(chainId);
+        Runnable callback = afterNextChainFetch;
+        afterNextChainFetch = null;
+        if (callback != null) {
+            callback.run();
+        }
+        return record;
     }
 
     @Override

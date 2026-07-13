@@ -98,8 +98,9 @@ public class RuleDbLazyLoadTest extends BaseRuleDbTest {
 		InMemoryRuleRepository.DOWN = true;
 		LiteflowResponse r = executor.execute2Resp("chain1", "arg");
 		Assertions.assertFalse(r.isSuccess());
-		// fetch-retry-times=1 → 首次 + 重试一次 = 2 次尝试
-		Assertions.assertEquals(2, InMemoryRuleRepository.FETCH_CHAIN_COUNT.get());
+		// 候选加载先读 metadata；fetch-retry-times=1 → 首次 + 重试一次 = 2 次尝试
+		Assertions.assertEquals(2, InMemoryRuleRepository.FETCH_CHAIN_META_COUNT.get());
+		Assertions.assertEquals(0, InMemoryRuleRepository.FETCH_CHAIN_COUNT.get());
 	}
 
 	@Test

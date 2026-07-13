@@ -119,7 +119,7 @@ public class Chain implements Executable {
 
 		//如果EL还未编译，则进行编译
 		if (com.yomahub.liteflow.repository.RuleDbRuntime.isChainStale(chainId)) {
-			this.setCompiled(false);
+			LiteFlowChainELBuilder.buildUnCompileChain(this);
 		}
 		if (BooleanUtil.isFalse(isCompiled)) {
 			synchronized (this) {
@@ -286,6 +286,16 @@ public class Chain implements Executable {
 
 	public void setRouteEl(String routeEl) {
 		this.routeEl = routeEl;
+	}
+
+	public synchronized void installCompiledRule(Chain candidate) {
+		this.el = candidate.getEl();
+		this.elMd5 = candidate.getElMd5();
+		this.routeEl = candidate.getRouteEl();
+		this.routeItem = candidate.getRouteItem();
+		this.namespace = candidate.getNamespace();
+		this.conditionList = candidate.getConditionList();
+		this.isCompiled = candidate.isCompiled();
 	}
 
 	public boolean isAbstract() {

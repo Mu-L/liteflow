@@ -60,6 +60,8 @@ public class LiteFlowChainELBuilder {
 
 	private Chain chain;
 
+	private String compilationOwnerChainId;
+
 	/**
 	 * 这是route EL的文本
 	 */
@@ -91,7 +93,15 @@ public class LiteFlowChainELBuilder {
 
 	public LiteFlowChainELBuilder(Chain chain) {
 		this.chain = chain;
+		this.compilationOwnerChainId = chain.getChainId();
 		this.conditionList = new ArrayList<>();
+	}
+
+	public static Chain compileUnpublishedChain(Chain chain, String ownerChainId) {
+		LiteFlowChainELBuilder builder = new LiteFlowChainELBuilder(chain);
+		builder.compilationOwnerChainId = ownerChainId;
+		builder.compileChain(false);
+		return chain;
 	}
 
 	// 在parser中chain的build是2段式的，因为涉及到依赖问题，以前是递归parser
@@ -203,6 +213,10 @@ public class LiteFlowChainELBuilder {
 	}
 
 	private void compileChain(){
+		compileChain(true);
+	}
+
+	private void compileChain(boolean publish){
 		LiteflowConfig liteflowConfig = LiteflowConfigGetter.get();
 		// 编译规则
 		String elStr = this.chain.getEl();
@@ -277,7 +291,9 @@ public class LiteFlowChainELBuilder {
 		if (CollectionUtil.isNotEmpty(this.chain.getConditionList())){
 			this.chain.setCompiled(true);
 		}
-		FlowBus.addChain(this.chain);
+		if (publish) {
+			FlowBus.addChain(this.chain);
+		}
 	}
 
 
@@ -337,8 +353,9 @@ public class LiteFlowChainELBuilder {
 		// Rule-DB 模式：影子/失效 chain 先回源填 EL
 		boolean ruleDbActive = com.yomahub.liteflow.repository.RuleDbRuntime.isActive();
 		try {
-			if (ruleDbActive){
-				com.yomahub.liteflow.repository.RuleDbRuntime.ensureChainLoaded(chain.getChainId());
+			if (ruleDbActive
+					&& com.yomahub.liteflow.repository.RuleDbRuntime.loadAndInstallChainCandidate(chain)){
+				return;
 			}
 			if (StrUtil.isBlank(chain.getEl())){
 				throw new FlowSystemException(StrUtil.format("no el content in this unCompile chain[{}]", chain.getChainId()));
@@ -378,7 +395,9 @@ public class LiteFlowChainELBuilder {
 		// 所以这里要判断表达式里有没有其他的chain，如果有，进行先行解析
 		Set<String> itemSet = EXPRESS_RUNNER.getOutVarNames(elStr);
 		itemSet.forEach(item -> {
-			if (FlowBus.containChain(item) && ObjectUtil.notEqual(chain.getChainId(), item)) {
+			if (FlowBus.containChain(item)
+					&& ObjectUtil.notEqual(chain.getChainId(), item)
+					&& ObjectUtil.notEqual(compilationOwnerChainId, item)) {
 				Chain itemChain = FlowBus.getChain(item);
 				if (!itemChain.isCompiled()){
 					buildUnCompileChain(FlowBus.getChain(item));

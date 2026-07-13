@@ -18,6 +18,7 @@ import com.yomahub.liteflow.meta.LiteflowMetaOperator;
 import com.yomahub.liteflow.property.LiteflowConfig;
 import com.yomahub.liteflow.property.LiteflowConfigGetter;
 import com.yomahub.liteflow.property.RuleDbConfig;
+import com.yomahub.liteflow.repository.runtime.ChainCandidateLoader;
 import com.yomahub.liteflow.repository.runtime.RuleTargetState;
 import com.yomahub.liteflow.repository.runtime.RuleTargetStatus;
 import com.yomahub.liteflow.repository.vo.ChangeRecord;
@@ -210,7 +211,6 @@ public class RuleDbRuntime {
 			String trimmed = chainId.trim();
 			if (StrUtil.isNotBlank(trimmed) && isLive(CHAIN_STATES.get(trimmed))) {
 				try {
-					ensureChainLoaded(trimmed);
 					LiteFlowChainELBuilder.buildUnCompileChain(FlowBus.getChain(trimmed));
 				} catch (Exception e) {
 					LOG.warn("preload chain[{}] failed: {}", trimmed, e.getMessage());
@@ -265,6 +265,77 @@ public class RuleDbRuntime {
 
 	private static boolean isLive(RuleTargetState state) {
 		return state != null && state.getStatus() != RuleTargetStatus.DELETED;
+	}
+
+	/** Builds a stable candidate off-bus and installs it only after compilation succeeds. */
+	public static boolean loadAndInstallChainCandidate(Chain chain) {
+		if (chain == null) {
+			return false;
+		}
+		String chainId = chain.getChainId();
+		RuleTargetState state = CHAIN_STATES.get(chainId);
+		if (!isLive(state)) {
+			return false;
+		}
+		if (chain != SHADOW_CHAINS.get(chainId) || FlowBus.getChain(chainId) != chain) {
+			throw new ChainLoadException(StrUtil.format("chain[{}] is no longer the active rule-db shadow", chainId));
+		}
+		if (state.getStatus() == RuleTargetStatus.READY && state.getActiveVersion() > 0 && chain.isCompiled()) {
+			return true;
+		}
+
+		boolean hadActive = state.getActiveVersion() > 0;
+		if (hadActive && !state.getLoadLock().tryLock()) {
+			return true;
+		}
+		if (!hadActive) {
+			state.getLoadLock().lock();
+		}
+		try {
+			RuleTargetState current = CHAIN_STATES.get(chainId);
+			if (current != state || !isLive(current)
+					|| chain != SHADOW_CHAINS.get(chainId) || FlowBus.getChain(chainId) != chain) {
+				throw new ChainLoadException(StrUtil.format("chain[{}] changed or was deleted while loading", chainId));
+			}
+			if (state.getStatus() == RuleTargetStatus.READY && state.getActiveVersion() > 0 && chain.isCompiled()) {
+				return true;
+			}
+
+			RuleLoadAttempt attempt = new RuleLoadAttempt(state);
+			state.markLoading();
+			try {
+				ChainCandidateLoader.Candidate candidate = new ChainCandidateLoader(repositoryForRead(), retryTimes())
+						.load(chainId, attempt.version, attempt.md5);
+				installChainCandidate(chainId, chain, attempt, candidate);
+				return true;
+			} catch (RuntimeException e) {
+				synchronized (RuleDbRuntime.class) {
+					attempt.markFailedIfCurrent(CHAIN_STATES.get(chainId), e);
+				}
+				if (hadActive && CHAIN_STATES.get(chainId) == state && isLive(state)) {
+					return true;
+				}
+				throw e;
+			}
+		} finally {
+			state.getLoadLock().unlock();
+		}
+	}
+
+	private static synchronized void installChainCandidate(String chainId, Chain chain, RuleLoadAttempt attempt,
+			ChainCandidateLoader.Candidate candidate) {
+		RuleTargetState state = CHAIN_STATES.get(chainId);
+		if (state != attempt.state || !isLive(state)
+				|| chain != SHADOW_CHAINS.get(chainId) || FlowBus.getChain(chainId) != chain
+				|| !state.isGenerationCurrent(candidate.getVersion(), candidate.getMd5())
+				|| !state.markLoaded(candidate.getVersion(), candidate.getMd5())) {
+			throw new ChainLoadException(StrUtil.format("chain[{}] changed or was deleted while loading", chainId));
+		}
+		chain.installCompiledRule(candidate.getChain());
+		if (!state.activateLoaded()) {
+			throw new ChainLoadException(StrUtil.format("chain[{}] changed or was deleted while activating", chainId));
+		}
+		recordChainCache(chainId);
 	}
 
 	/** buildUnCompileChain 回源钩子：影子或版本失效时，拉内容填 EL，交由后续既有编译逻辑 */
@@ -477,6 +548,10 @@ public class RuleDbRuntime {
 			}
 			return;
 		}
+		recordChainCache(chainId);
+	}
+
+	private static void recordChainCache(String chainId) {
 		List<String> scriptRefs = new ArrayList<>();
 		try {
 			for (Node n : LiteflowMetaOperator.getNodes(chainId)) {

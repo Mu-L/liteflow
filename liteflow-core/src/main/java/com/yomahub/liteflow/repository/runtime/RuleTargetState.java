@@ -171,4 +171,8 @@ public final class RuleTargetState {
 		return lastError;
 	}
 
+	public ReentrantLock getLoadLock() {
+		return loadLock;
+	}
+
 }
