@@ -140,9 +140,12 @@ Three modes (`ParseModeEnum`):
 - **liteflow-rule-apollo**: Apollo configuration center
 - **liteflow-rule-redis**: Redis configuration source
 
-#### Rule-DB Modules (2 implementations in the root-level `liteflow-rule-db/` parent module)
-- **liteflow-rule-db-sql**: SQL-backed authoritative rule storage
-- **liteflow-rule-db-redis**: Redis-backed authoritative rule storage
+#### Rule-DB Modules (Publisher plus 4 implementations in the root-level `liteflow-rule-db/` parent module)
+- **liteflow-rule-db-publisher**: Backend-neutral publishing API and ServiceLoader contract
+- **liteflow-rule-db-sql**: SQL-backed authoritative storage with change-log polling
+- **liteflow-rule-db-redis**: Redis-backed authoritative storage with change-log polling
+- **liteflow-rule-db-etcd**: etcd-backed authoritative storage with metadata watch
+- **liteflow-rule-db-zk**: ZooKeeper-backed authoritative storage with metadata watch
 
 #### Script Plugins (11 languages in `liteflow-script-plugin/`)
 - **liteflow-script-groovy**: Groovy scripting
