@@ -104,6 +104,16 @@ public class LiteFlowChainELBuilder {
 		return chain;
 	}
 
+	public static void assignNodeInstanceIds(Chain chain, String ownerChainId) {
+		if (!LiteflowConfigGetter.get().getEnableNodeInstanceId() || chain == null
+				|| CollectionUtil.isEmpty(chain.getConditionList())) {
+			return;
+		}
+		LiteFlowChainELBuilder builder = new LiteFlowChainELBuilder(chain);
+		builder.compilationOwnerChainId = ownerChainId;
+		chain.getConditionList().forEach(builder::setNodesInstanceId);
+	}
+
 	// 在parser中chain的build是2段式的，因为涉及到依赖问题，以前是递归parser
 	// 2.6.8之后取消了递归的模式，两段式组装，先把带有chainName的chain对象放进去，第二段再组装chain里面的condition
 	// 所以这里setChainName的时候需要判断下
@@ -132,6 +142,11 @@ public class LiteFlowChainELBuilder {
 		return this;
 	}
 
+	public LiteFlowChainELBuilder setTransientElChain(boolean transientElChain) {
+		this.chain.setTransientElChain(transientElChain);
+		return this;
+	}
+
 	public LiteFlowChainELBuilder setRoute(String routeEl){
 		if (StrUtil.isBlank(routeEl)) {
 			return this;
@@ -155,10 +170,14 @@ public class LiteFlowChainELBuilder {
 	}
 
 	// 往condition里设置instanceId
-    private void setNodesInstanceId(Condition condition) {
+	private void setNodesInstanceId(Condition condition) {
 		NodeInstanceIdManageSpi nodeInstanceIdManageSpi = NodeInstanceIdManageSpiHolder.getInstance().getNodeInstanceIdManageSpi();
-
-		nodeInstanceIdManageSpi.setNodesInstanceId(condition, chain);
+		Chain identityChain = chain;
+		if (!Objects.equals(compilationOwnerChainId, chain.getChainId())) {
+			identityChain = new Chain(compilationOwnerChainId);
+			identityChain.setElMd5(chain.getElMd5());
+		}
+		nodeInstanceIdManageSpi.setNodesInstanceId(condition, identityChain);
     }
 
 
@@ -231,7 +250,7 @@ public class LiteFlowChainELBuilder {
 				throw new ELParseException(StrUtil.format("parse el fail,el:[{}]", elStr));
 			}
 
-			if (liteflowConfig.getEnableNodeInstanceId()) {
+			if (publish && liteflowConfig.getEnableNodeInstanceId()) {
 				setNodesInstanceId(condition);
 			}
 

@@ -352,6 +352,7 @@ public class RuleDbRuntime {
 				|| !state.markLoaded(candidate.getVersion(), candidate.getMd5())) {
 			throw new ChainLoadException(StrUtil.format("chain[{}] changed or was deleted while loading", chainId));
 		}
+		LiteFlowChainELBuilder.assignNodeInstanceIds(candidate.getChain(), chainId);
 		chain.installCompiledRule(candidate.getChain());
 		if (!state.activateLoaded()) {
 			throw new ChainLoadException(StrUtil.format("chain[{}] changed or was deleted while activating", chainId));
@@ -663,6 +664,10 @@ public class RuleDbRuntime {
 	public static boolean isChainStale(String chainId) {
 		RuleTargetState state = CHAIN_STATES.get(chainId);
 		return isLive(state) && state.getStatus() == RuleTargetStatus.STALE;
+	}
+
+	public static boolean isManagedChain(String chainId) {
+		return isLive(CHAIN_STATES.get(chainId));
 	}
 
 	public static boolean isScriptStale(String nodeId) {

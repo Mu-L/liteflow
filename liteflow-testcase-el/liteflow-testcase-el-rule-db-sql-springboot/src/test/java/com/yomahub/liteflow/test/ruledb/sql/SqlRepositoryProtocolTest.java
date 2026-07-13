@@ -8,6 +8,7 @@ import cn.hutool.crypto.SecureUtil;
 import com.yomahub.liteflow.exception.SeqGapException;
 import com.yomahub.liteflow.repository.sql.SqlRulePublisher;
 import com.yomahub.liteflow.repository.sql.SqlRuleRepository;
+import com.yomahub.liteflow.repository.vo.ChainMeta;
 import com.yomahub.liteflow.repository.vo.ChainRecord;
 import com.yomahub.liteflow.repository.vo.ChangeRecord;
 import com.yomahub.liteflow.repository.vo.RuleManifest;
@@ -61,6 +62,10 @@ public class SqlRepositoryProtocolTest {
 		Assertions.assertEquals(v2, r.getVersion());
 		Assertions.assertEquals(SecureUtil.md5("THEN(b, a)"), r.getMd5());
 		Assertions.assertTrue(r.isEnable());
+		ChainMeta meta = repository.fetchChainMeta("protoChain");
+		Assertions.assertNotNull(meta);
+		Assertions.assertEquals(v2, meta.getVersion());
+		Assertions.assertEquals(r.getMd5(), meta.getMd5());
 
 		// change_log 两条 UPSERT，seq 严格递增，版本对应
 		List<ChangeRecord> changes = repository.fetchChangesSince(before);

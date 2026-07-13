@@ -116,7 +116,7 @@ public class FlowBus {
 		chainMap.put(chain.getChainId(), chain);
 
 		if (StrUtil.isNotBlank(chain.getEl())){
-			elMd5Map.put(chain.getElMd5(), chain.getChainId());
+			addElMd5Mapping(chain, chain.getElMd5());
 		}
 
 		//如果有生命周期则执行相应生命周期实现
@@ -440,28 +440,45 @@ public class FlowBus {
 		return elMd5Map.get(elMd5);
 	}
 
-	/** Refreshes one published chain's EL lookup without touching another chain's mapping. */
-	public static synchronized boolean refreshElMd5Mapping(Chain chain, String oldElMd5, String newElMd5) {
+	public static synchronized boolean removeElMd5Mapping(Chain chain, String elMd5) {
 		if (chain == null || chainMap.get(chain.getChainId()) != chain) {
 			return false;
 		}
 		String chainId = chain.getChainId();
-		if (StrUtil.isNotBlank(oldElMd5) && !Objects.equals(oldElMd5, newElMd5)) {
-			elMd5Map.remove(oldElMd5, chainId);
-		}
-		if (StrUtil.isBlank(newElMd5)) {
-			return true;
-		}
-		String existing = elMd5Map.putIfAbsent(newElMd5, chainId);
-		return existing == null || Objects.equals(existing, chainId);
+		return StrUtil.isBlank(elMd5) || elMd5Map.remove(elMd5, chainId);
 	}
 
-	public static boolean removeChain(String chainId) {
+	public static synchronized boolean addElMd5Mapping(Chain chain, String elMd5) {
+		if (chain == null || chainMap.get(chain.getChainId()) != chain) {
+			return false;
+		}
+		if (StrUtil.isBlank(elMd5)) {
+			return true;
+		}
+		String chainId = chain.getChainId();
+		boolean[] installed = {false};
+		elMd5Map.compute(elMd5, (key, existingChainId) -> {
+			if (existingChainId == null || Objects.equals(existingChainId, chainId)) {
+				installed[0] = true;
+				return chainId;
+			}
+			Chain existingChain = chainMap.get(existingChainId);
+			if (existingChain == null
+					|| (!chain.isTransientElChain() && existingChain.isTransientElChain())) {
+				installed[0] = true;
+				return chainId;
+			}
+			return existingChainId;
+		});
+		return installed[0];
+	}
+
+	public static synchronized boolean removeChain(String chainId) {
 		if (containChain(chainId)) {
 			Chain removedChain = chainMap.remove(chainId);
 			// 移除 elMd5 对应的 chainId；影子 chain（rule-db 模式下 EL 从未加载）没有 elMd5
 			if (removedChain.getElMd5() != null) {
-				elMd5Map.remove(removedChain.getElMd5());
+				elMd5Map.remove(removedChain.getElMd5(), chainId);
 			}
 			return true;
 		}
@@ -476,7 +493,7 @@ public class FlowBus {
 		return chainMap.replace(chainId, expected, replacement);
 	}
 
-	public static boolean removeChain(String chainId, Chain expected) {
+	public static synchronized boolean removeChain(String chainId, Chain expected) {
 		if (expected == null || !chainMap.remove(chainId, expected)) {
 			return false;
 		}

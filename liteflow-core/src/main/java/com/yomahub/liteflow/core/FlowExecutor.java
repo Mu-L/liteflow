@@ -356,6 +356,7 @@ public class FlowExecutor {
 			chainId = IdUtil.fastSimpleUUID();
 			LiteFlowChainELBuilder.createChain()
 					.setChainId(chainId)
+					.setTransientElChain(true)
 					.setEL(normalizedEl)
 					.build();
 		}
@@ -698,8 +699,7 @@ public class FlowExecutor {
 
 		String finalNamespace = namespace;
 		List<Chain> routeChainList = FlowBus.getChainMap().values().stream()
-				.filter(chain -> chain.getNamespace().equals(finalNamespace))
-				.filter(chain -> chain.getRouteItem() != null).collect(Collectors.toList());
+				.filter(chain -> chain.hasRouteInNamespace(finalNamespace)).collect(Collectors.toList());
 
 		if (CollUtil.isEmpty(routeChainList)){
 			String errorMsg = StrUtil.format("no route found for namespace[{}]", finalNamespace);

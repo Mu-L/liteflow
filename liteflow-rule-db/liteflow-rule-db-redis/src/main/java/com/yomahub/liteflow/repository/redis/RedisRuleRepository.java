@@ -87,6 +87,16 @@ public class RedisRuleRepository implements RuleRepository {
 	}
 
 	@Override
+	public ChainMeta fetchChainMeta(String chainId) {
+		String encoded = redisson().<String, String>getMap(RedisKeys.chainIndex(), StringCodec.INSTANCE).get(chainId);
+		if (StrUtil.isBlank(encoded)) {
+			return null;
+		}
+		String[] parts = encoded.split("\\|", -1);
+		return new ChainMeta(chainId, parseLong(parts, 0), get(parts, 1));
+	}
+
+	@Override
 	public ScriptRecord fetchScript(String nodeId) {
 		Map<String, String> h = readAllMap(redisson(), RedisKeys.script(nodeId));
 		if (h == null || h.isEmpty()) {

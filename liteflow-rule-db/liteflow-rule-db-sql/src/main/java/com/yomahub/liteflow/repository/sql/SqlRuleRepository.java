@@ -143,6 +143,25 @@ public class SqlRuleRepository implements RuleRepository {
 	}
 
 	@Override
+	public ChainMeta fetchChainMeta(String chainId) {
+		String sql = "SELECT chain_id, version, content_md5 FROM " + dialect.chainTable()
+				+ " WHERE application_name = ? AND chain_id = ? AND enable = 1";
+		try (Connection c = conn(); PreparedStatement ps = c.prepareStatement(sql)) {
+			ps.setString(1, app());
+			ps.setString(2, chainId);
+			try (ResultSet rs = ps.executeQuery()) {
+				if (!rs.next()) {
+					return null;
+				}
+				return new ChainMeta(rs.getString(1), rs.getLong(2), rs.getString(3));
+			}
+		}
+		catch (SQLException e) {
+			throw wrap("fetchChainMeta", e);
+		}
+	}
+
+	@Override
 	public ScriptRecord fetchScript(String nodeId) {
 		String sql = "SELECT node_id, script_data, script_name, script_type, script_language, version, content_md5, enable FROM "
 				+ dialect.scriptTable() + " WHERE application_name = ? AND node_id = ?";

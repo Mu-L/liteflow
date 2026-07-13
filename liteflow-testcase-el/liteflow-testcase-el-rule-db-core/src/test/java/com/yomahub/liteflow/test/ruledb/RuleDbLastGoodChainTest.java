@@ -25,6 +25,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 
 public class RuleDbLastGoodChainTest extends BaseRuleDbTest {
 
@@ -71,6 +72,38 @@ public class RuleDbLastGoodChainTest extends BaseRuleDbTest {
 	}
 
 	@Test
+	public void testRuleDbElMappingTakesOverEarlierTransientChain() {
+		String el = "THEN(a, b)";
+		InMemoryRuleRepository.putChain("chain1", el);
+		registerCommonCmp();
+		FlowExecutor executor = buildExecutor(new RuleDbConfig());
+
+		String transientId = executor.execute2RespWithEL(el).getChainId();
+		Assertions.assertNotEquals("chain1", transientId);
+		Assertions.assertTrue(FlowBus.getChain(transientId).isTransientElChain());
+
+		Assertions.assertTrue(executor.execute2Resp("chain1", "arg").isSuccess());
+		Assertions.assertEquals("chain1", FlowBus.getChainIdByElMd5(elMd5(el)));
+		Assertions.assertTrue(FlowBus.removeChain(transientId));
+		Assertions.assertEquals("chain1", FlowBus.getChainIdByElMd5(elMd5(el)));
+	}
+
+	@Test
+	public void testLateTransientChainCannotOverwriteRuleDbElMapping() {
+		String el = "THEN(a, b)";
+		FlowExecutor executor = loadVersionOne(el);
+
+		LiteFlowChainELBuilder.createChain()
+				.setChainId("lateTransient")
+				.setTransientElChain(true)
+				.setEL(el)
+				.build();
+
+		Assertions.assertEquals("chain1", FlowBus.getChainIdByElMd5(elMd5(el)));
+		Assertions.assertEquals("chain1", executor.execute2RespWithEL(el).getChainId());
+	}
+
+	@Test
 	public void testRuleDbElMappingDoesNotOverwriteAnotherChain() {
 		String el = "THEN(a, b)";
 		InMemoryRuleRepository.putChain("chain1", el);
@@ -80,6 +113,8 @@ public class RuleDbLastGoodChainTest extends BaseRuleDbTest {
 
 		Assertions.assertTrue(executor.execute2Resp("chain1", "arg").isSuccess());
 
+		Assertions.assertEquals("application", FlowBus.getChainIdByElMd5(elMd5(el)));
+		RuleDbRuntime.destroy();
 		Assertions.assertEquals("application", FlowBus.getChainIdByElMd5(elMd5(el)));
 	}
 
@@ -181,6 +216,48 @@ public class RuleDbLastGoodChainTest extends BaseRuleDbTest {
 			Assertions.assertTrue(leaderResponse.isSuccess());
 			Assertions.assertEquals("b==>a", leaderResponse.getExecuteStepStr());
 			Assertions.assertEquals(2L, RuleDbRuntime.chainState("chain1").getActiveVersion());
+		} finally {
+			releaseCandidate.countDown();
+			pool.shutdownNow();
+		}
+	}
+
+	@Test
+	public void testColdExecuteDoesNotDeadlockWithRoutePreparation() throws Exception {
+		putRouteChain("route1", "THEN(a, b)", "route", "orders");
+		registerCommonCmp();
+		registerRouteCmp();
+		FlowExecutor executor = buildExecutor(new RuleDbConfig());
+		CountDownLatch candidateFetched = new CountDownLatch(1);
+		CountDownLatch releaseCandidate = new CountDownLatch(1);
+		InMemoryRuleRepository.afterNextChainFetch(() -> {
+			candidateFetched.countDown();
+			await(releaseCandidate);
+		});
+
+		ExecutorService pool = Executors.newFixedThreadPool(2, runnable -> {
+			Thread thread = new Thread(runnable, "rule-db-deadlock-test");
+			thread.setDaemon(true);
+			return thread;
+		});
+		AtomicReference<Thread> executeThread = new AtomicReference<>();
+		try {
+			Future<?> routePreparation = pool.submit(RuleDbRuntime::prepareRouteChains);
+			Assertions.assertTrue(candidateFetched.await(5, TimeUnit.SECONDS));
+			Future<LiteflowResponse> execution = pool.submit(() -> {
+				executeThread.set(Thread.currentThread());
+				return executor.execute2Resp("route1", "arg");
+			});
+			waitUntil(() -> {
+				Thread thread = executeThread.get();
+				return thread != null && thread.getState() == Thread.State.WAITING;
+			}, 2000);
+
+			releaseCandidate.countDown();
+			routePreparation.get(2, TimeUnit.SECONDS);
+			LiteflowResponse response = execution.get(2, TimeUnit.SECONDS);
+			Assertions.assertTrue(response.isSuccess());
+			Assertions.assertEquals("a==>b", response.getExecuteStepStr());
 		} finally {
 			releaseCandidate.countDown();
 			pool.shutdownNow();

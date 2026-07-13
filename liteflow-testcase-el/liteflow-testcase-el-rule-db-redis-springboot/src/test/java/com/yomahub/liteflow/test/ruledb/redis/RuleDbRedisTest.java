@@ -11,6 +11,7 @@ import com.yomahub.liteflow.flow.LiteflowResponse;
 import com.yomahub.liteflow.repository.RuleDbSyncManager;
 import com.yomahub.liteflow.repository.redis.RedisRulePublisher;
 import com.yomahub.liteflow.repository.redis.RedisRuleRepository;
+import com.yomahub.liteflow.repository.vo.ChainMeta;
 import com.yomahub.liteflow.repository.vo.ChainRecord;
 import com.yomahub.liteflow.repository.vo.ChangeRecord;
 import com.yomahub.liteflow.repository.vo.RuleManifest;
@@ -135,6 +136,10 @@ public class RuleDbRedisTest {
 		Assertions.assertEquals(1, r.getVersion());
 		Assertions.assertEquals(SecureUtil.md5("THEN(a, b)"), r.getMd5());
 		Assertions.assertTrue(r.isEnable());
+		ChainMeta meta = repository.fetchChainMeta("protoR");
+		Assertions.assertNotNull(meta);
+		Assertions.assertEquals(1, meta.getVersion());
+		Assertions.assertEquals(r.getMd5(), meta.getMd5());
 
 		// seq 自增 + changelog ZSet 落一条同构 JSON
 		Assertions.assertEquals(before + 1, repository.fetchLatestSeq());
