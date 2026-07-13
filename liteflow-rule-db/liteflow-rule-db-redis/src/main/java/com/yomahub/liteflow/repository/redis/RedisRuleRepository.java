@@ -2,139 +2,166 @@ package com.yomahub.liteflow.repository.redis;
 
 import cn.hutool.core.util.StrUtil;
 import com.yomahub.liteflow.exception.SeqGapException;
-import com.yomahub.liteflow.repository.RuleChangeListener;
+import com.yomahub.liteflow.property.LiteflowConfigGetter;
+import com.yomahub.liteflow.property.RuleDbConfig;
+import com.yomahub.liteflow.property.RuleDbRedisConfig;
 import com.yomahub.liteflow.repository.RuleRepository;
-import com.yomahub.liteflow.repository.vo.*;
+import com.yomahub.liteflow.repository.vo.ChainMeta;
+import com.yomahub.liteflow.repository.vo.ChainRecord;
+import com.yomahub.liteflow.repository.vo.ChangeRecord;
+import com.yomahub.liteflow.repository.vo.RuleManifest;
+import com.yomahub.liteflow.repository.vo.ScriptMeta;
+import com.yomahub.liteflow.repository.vo.ScriptRecord;
+import org.redisson.api.RBatch;
+import org.redisson.api.RFuture;
 import org.redisson.api.RScoredSortedSet;
-import org.redisson.api.RTopic;
 import org.redisson.api.RedissonClient;
 import org.redisson.client.codec.StringCodec;
 import org.redisson.client.protocol.ScoredEntry;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collection;
+import java.util.Collections;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
-/**
- * Rule-DB 的 Redis 权威源实现。
- *
- * <p>读路径：
- * <ul>
- *     <li>{@link #fetchManifest()}：读 chain-index/script-index 两个 HASH，按 {@code "version|md5"}
- *     与 {@code "version|md5|type|language|name"} 拆分；末尾 {@code seq} 复用 {@link #fetchLatestSeq()}。</li>
- *     <li>{@link #fetchChain(String)} / {@link #fetchScript(String)}：读对应内容 HASH（el/route/namespace/
- *     version/md5/enable 或 script/name/type/language/version/md5/enable）；{@code enable} 以 {@code "0"} 判否。</li>
- *     <li>{@link #fetchLatestSeq()}：读 {@code seq} key（由发布端 INCR 维护）。</li>
- *     <li>{@link #fetchChangesSince(long)}：ZSet {@code changelog} 按 score 区间 {@code (seq, +inf]} 取成员（JSON），
- *     并做断档检测——最小 score &gt; seq+1 时抛 {@link SeqGapException} 触发全量对账。</li>
- *     <li>{@link #subscribe(RuleChangeListener)}：订阅 {@code notify} 频道，逐条 JSON 解码后回调。</li>
- * </ul>
- *
- * <p>所有 RMap/RScoredSortedSet/RTopic/RBucket 均使用 {@link StringCodec}，使值以 String 形式返回。
- *
- * @author Bryan.Zhang
- * @since 2.16.1
- */
+/** Redis authoritative repository using ID sets and pipelined metadata reads. */
 public class RedisRuleRepository implements RuleRepository {
 
-	private final RedisConnectionManager connectionManager = new RedisConnectionManager();
+	private static final Set<String> CHAIN_META_FIELDS = fields("version", "md5", "enable");
+	private static final Set<String> SCRIPT_META_FIELDS = fields(
+			"version", "md5", "enable", "type", "language", "name");
 
-	private RedissonClient redisson() {
-		return connectionManager.getClient();
+	private final RedisConnectionManager connectionManager;
+	private final RedisKeys keys;
+
+	public RedisRuleRepository() {
+		RuleDbConfig config = LiteflowConfigGetter.get().getRuleDb();
+		RuleDbRedisConfig redis = config == null || config.getRedis() == null
+				? new RuleDbRedisConfig() : config.getRedis();
+		String applicationName = config == null ? null : config.getApplicationName();
+		this.connectionManager = new RedisConnectionManager(redis);
+		this.keys = new RedisKeys(redis.getKeyPrefix(), applicationName);
+	}
+
+	RedisRuleRepository(RedisConnectionManager connectionManager, RedisKeys keys) {
+		this.connectionManager = connectionManager;
+		this.keys = keys;
 	}
 
 	@Override
 	public RuleManifest fetchManifest() {
 		RedissonClient client = redisson();
-		RuleManifest manifest = new RuleManifest();
+		List<String> chainIds = sorted(client.<String>getSet(keys.chainIds(), StringCodec.INSTANCE).readAll());
+		List<String> scriptIds = sorted(client.<String>getSet(keys.scriptIds(), StringCodec.INSTANCE).readAll());
+
+		RBatch batch = client.createBatch();
+		List<RFuture<Map<String, String>>> chainFutures = new ArrayList<>();
+		for (String chainId : chainIds) {
+			chainFutures.add(batch.<String, String>getMap(keys.chain(chainId), StringCodec.INSTANCE)
+					.getAllAsync(CHAIN_META_FIELDS));
+		}
+		List<RFuture<Map<String, String>>> scriptFutures = new ArrayList<>();
+		for (String nodeId : scriptIds) {
+			scriptFutures.add(batch.<String, String>getMap(keys.script(nodeId), StringCodec.INSTANCE)
+					.getAllAsync(SCRIPT_META_FIELDS));
+		}
+		RFuture<String> sequenceFuture = batch.<String>getBucket(keys.seq(), StringCodec.INSTANCE).getAsync();
+		batch.execute();
+
 		List<ChainMeta> chains = new ArrayList<>();
-		Map<String, String> chainIndex = readAllMap(client, RedisKeys.chainIndex());
-		for (Map.Entry<String, String> e : chainIndex.entrySet()) {
-			// value = "version|md5"
-			String[] parts = e.getValue().split("\\|", -1);
-			chains.add(new ChainMeta(e.getKey(), parseLong(parts, 0), get(parts, 1)));
+		for (int i = 0; i < chainIds.size(); i++) {
+			Map<String, String> metadata = chainFutures.get(i).getNow();
+			if (isEnabled(metadata)) {
+				chains.add(new ChainMeta(chainIds.get(i), parseLong(metadata.get("version")), metadata.get("md5")));
+			}
 		}
 		List<ScriptMeta> scripts = new ArrayList<>();
-		Map<String, String> scriptIndex = readAllMap(client, RedisKeys.scriptIndex());
-		for (Map.Entry<String, String> e : scriptIndex.entrySet()) {
-			// value = "version|md5|type|language|name"
-			String[] parts = e.getValue().split("\\|", -1);
-			scripts.add(new ScriptMeta(e.getKey(), parseLong(parts, 0), get(parts, 1),
-					get(parts, 2), get(parts, 3), get(parts, 4)));
+		for (int i = 0; i < scriptIds.size(); i++) {
+			Map<String, String> metadata = scriptFutures.get(i).getNow();
+			if (isEnabled(metadata)) {
+				scripts.add(new ScriptMeta(scriptIds.get(i), parseLong(metadata.get("version")), metadata.get("md5"),
+						valueOrNull(metadata.get("type")), valueOrNull(metadata.get("language")),
+						valueOrNull(metadata.get("name"))));
+			}
 		}
+
+		RuleManifest manifest = new RuleManifest();
 		manifest.setChains(chains);
 		manifest.setScripts(scripts);
-		manifest.setLatestSeq(fetchLatestSeq());
+		manifest.setLatestSeq(parseLong(sequenceFuture.getNow()));
 		return manifest;
 	}
 
 	@Override
 	public ChainRecord fetchChain(String chainId) {
-		Map<String, String> h = readAllMap(redisson(), RedisKeys.chain(chainId));
-		if (h == null || h.isEmpty()) {
+		Map<String, String> content = readAllMap(redisson(), keys.chain(chainId));
+		if (content.isEmpty()) {
 			return null;
 		}
-		ChainRecord r = new ChainRecord();
-		r.setChainId(chainId);
-		r.setEl(h.get("el"));
-		r.setRoute(h.get("route"));
-		r.setNamespace(h.get("namespace"));
-		r.setVersion(parseLong(h.get("version")));
-		r.setMd5(h.get("md5"));
-		r.setEnable(!"0".equals(h.get("enable")));
-		return r;
+		ChainRecord record = new ChainRecord();
+		record.setChainId(chainId);
+		record.setEl(content.get("el"));
+		record.setRoute(valueOrNull(content.get("route")));
+		record.setNamespace(valueOrNull(content.get("namespace")));
+		record.setVersion(parseLong(content.get("version")));
+		record.setMd5(content.get("md5"));
+		record.setEnable(!"0".equals(content.get("enable")));
+		return record;
 	}
 
 	@Override
 	public ChainMeta fetchChainMeta(String chainId) {
-		String encoded = redisson().<String, String>getMap(RedisKeys.chainIndex(), StringCodec.INSTANCE).get(chainId);
-		if (StrUtil.isBlank(encoded)) {
+		Map<String, String> metadata = redisson().<String, String>getMap(
+				keys.chain(chainId), StringCodec.INSTANCE).getAll(CHAIN_META_FIELDS);
+		if (!isEnabled(metadata)) {
 			return null;
 		}
-		String[] parts = encoded.split("\\|", -1);
-		return new ChainMeta(chainId, parseLong(parts, 0), get(parts, 1));
+		return new ChainMeta(chainId, parseLong(metadata.get("version")), metadata.get("md5"));
 	}
 
 	@Override
 	public ScriptRecord fetchScript(String nodeId) {
-		Map<String, String> h = readAllMap(redisson(), RedisKeys.script(nodeId));
-		if (h == null || h.isEmpty()) {
+		Map<String, String> content = readAllMap(redisson(), keys.script(nodeId));
+		if (content.isEmpty()) {
 			return null;
 		}
-		ScriptRecord r = new ScriptRecord();
-		r.setNodeId(nodeId);
-		r.setScript(h.get("script"));
-		r.setName(h.get("name"));
-		r.setType(h.get("type"));
-		r.setLanguage(h.get("language"));
-		r.setVersion(parseLong(h.get("version")));
-		r.setMd5(h.get("md5"));
-		r.setEnable(!"0".equals(h.get("enable")));
-		return r;
+		ScriptRecord record = new ScriptRecord();
+		record.setNodeId(nodeId);
+		record.setScript(content.get("script"));
+		record.setName(valueOrNull(content.get("name")));
+		record.setType(valueOrNull(content.get("type")));
+		record.setLanguage(valueOrNull(content.get("language")));
+		record.setVersion(parseLong(content.get("version")));
+		record.setMd5(content.get("md5"));
+		record.setEnable(!"0".equals(content.get("enable")));
+		return record;
 	}
 
 	@Override
 	public ScriptMeta fetchScriptMeta(String nodeId) {
-		String encoded = readAllMap(redisson(), RedisKeys.scriptIndex()).get(nodeId);
-		if (StrUtil.isBlank(encoded)) {
+		Map<String, String> metadata = redisson().<String, String>getMap(
+				keys.script(nodeId), StringCodec.INSTANCE).getAll(SCRIPT_META_FIELDS);
+		if (!isEnabled(metadata)) {
 			return null;
 		}
-		String[] parts = encoded.split("\\|", -1);
-		return new ScriptMeta(nodeId, parseLong(parts, 0), get(parts, 1),
-				get(parts, 2), get(parts, 3), get(parts, 4));
+		return new ScriptMeta(nodeId, parseLong(metadata.get("version")), metadata.get("md5"),
+				valueOrNull(metadata.get("type")), valueOrNull(metadata.get("language")),
+				valueOrNull(metadata.get("name")));
 	}
 
 	@Override
 	public long fetchLatestSeq() {
-		Object v = redisson().getBucket(RedisKeys.seq(), StringCodec.INSTANCE).get();
-		return v == null ? 0 : parseLong(v.toString());
+		String value = redisson().<String>getBucket(keys.seq(), StringCodec.INSTANCE).get();
+		return parseLong(value);
 	}
 
 	@Override
 	public List<ChangeRecord> fetchChangesSince(long seq) {
-		RScoredSortedSet<String> log = redisson().getScoredSortedSet(RedisKeys.changelog(), StringCodec.INSTANCE);
-		// 断档检测：最小 score > seq+1 说明中间被裁剪
+		RScoredSortedSet<String> log = redisson().getScoredSortedSet(keys.changelog(), StringCodec.INSTANCE);
 		Collection<ScoredEntry<String>> firstEntry = log.entryRange(0, 0);
 		if (seq > 0 && !firstEntry.isEmpty()) {
 			double min = firstEntry.iterator().next().getScore();
@@ -142,25 +169,14 @@ public class RedisRuleRepository implements RuleRepository {
 				throw new SeqGapException("redis changelog gap: since=" + seq + " min=" + (long) min);
 			}
 		}
-		List<ChangeRecord> result = new ArrayList<>();
-		// (seq, +inf]：exclusive 下界
+
+		List<ChangeRecord> changes = new ArrayList<>();
 		Collection<String> members = log.valueRange(seq, false, Double.POSITIVE_INFINITY, true);
 		for (String json : members) {
-			result.add(ChangeCodec.fromJson(json));
+			changes.add(ChangeCodec.fromJson(json));
 		}
-		validateSeqContinuity(result, seq);
-		return result;
-	}
-
-	@Override
-	public void subscribe(RuleChangeListener listener) {
-		RTopic topic = redisson().getTopic(RedisKeys.notifyChannel(), StringCodec.INSTANCE);
-		topic.addListener(String.class, (channel, msg) -> {
-			ChangeRecord c = ChangeCodec.fromJson(msg);
-			List<ChangeRecord> one = new ArrayList<>();
-			one.add(c);
-			listener.onChanges(one);
-		});
+		validateSeqContinuity(changes, seq);
+		return changes;
 	}
 
 	@Override
@@ -168,28 +184,34 @@ public class RedisRuleRepository implements RuleRepository {
 		connectionManager.shutdown();
 	}
 
-	/** Redis 有 pub/sub 推送，seq 轮询只是丢消息兜底，默认放宽到 30s */
-	@Override
-	public int defaultSeqPollSeconds() {
-		return 30;
+	private RedissonClient redisson() {
+		return connectionManager.getClient();
 	}
 
-	/** 读取整个 HASH 为 {@code Map<String, String>}；显式类型见证避免链式调用退化为 {@code Map<Object,Object>}。 */
 	private static Map<String, String> readAllMap(RedissonClient client, String key) {
 		return client.<String, String>getMap(key, StringCodec.INSTANCE).readAllMap();
 	}
 
-	private static long parseLong(String s) {
-		return StrUtil.isBlank(s) ? 0 : Long.parseLong(s.trim());
+	private static boolean isEnabled(Map<String, String> metadata) {
+		return metadata != null && !metadata.isEmpty() && !"0".equals(metadata.get("enable"));
 	}
 
-	private static long parseLong(String[] parts, int idx) {
-		return idx < parts.length ? parseLong(parts[idx]) : 0;
+	private static long parseLong(String value) {
+		return StrUtil.isBlank(value) ? 0 : Long.parseLong(value.trim());
 	}
 
-	private static String get(String[] parts, int idx) {
-		String v = idx < parts.length ? parts[idx] : null;
-		return StrUtil.isBlank(v) ? null : v;
+	private static String valueOrNull(String value) {
+		return StrUtil.isBlank(value) ? null : value;
+	}
+
+	private static Set<String> fields(String... values) {
+		return Collections.unmodifiableSet(new HashSet<>(Arrays.asList(values)));
+	}
+
+	private static List<String> sorted(Set<String> values) {
+		List<String> result = new ArrayList<>(values);
+		Collections.sort(result);
+		return result;
 	}
 
 	private static void validateSeqContinuity(List<ChangeRecord> changes, long currentSeq) {

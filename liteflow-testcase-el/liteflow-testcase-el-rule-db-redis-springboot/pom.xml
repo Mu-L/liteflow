@@ -38,7 +38,7 @@
             <artifactId>spring-boot-starter-test</artifactId>
         </dependency>
 
-        <!-- embedded-redis：测试期拉起真实 redis 二进制（Linux/Mac），验证 Lua/cjson + pub/sub 端到端 -->
+        <!-- embedded-redis：测试期拉起真实 redis 二进制（Linux/Mac），验证 Lua/cjson + 轮询端到端 -->
         <dependency>
             <groupId>com.github.codemonstur</groupId>
             <artifactId>embedded-redis</artifactId>

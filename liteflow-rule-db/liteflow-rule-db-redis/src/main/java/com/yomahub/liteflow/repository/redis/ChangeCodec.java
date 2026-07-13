@@ -6,8 +6,8 @@ import com.yomahub.liteflow.repository.vo.ChangeRecord;
 /**
  * ChangeRecord ↔ JSON。字段：seq/targetType/targetId/op/version。
  *
- * <p>与 Task 3 的 Lua 发布端（{@code redis.call('PUBLISH', ch, cjson.encode(...))}）对齐：
- * cjson 产出 lower-camel 的 {@code {"seq":..,"targetType":"CHAIN","targetId":..,"op":"UPSERT","version":..}}，
+ * <p>与 Lua 写入 changelog 的 JSON 对齐：cjson 产出 lower-camel 的
+ * {@code {"seq":..,"targetType":"CHAIN","targetId":..,"op":"UPSERT","version":..}}，
  * 与 {@link ChangeRecord} 字段名逐一对应；枚举按名序列化，无需额外注解。
  *
  * @author Bryan.Zhang

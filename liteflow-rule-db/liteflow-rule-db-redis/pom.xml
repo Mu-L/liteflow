@@ -18,6 +18,11 @@
             <version>${revision}</version>
         </dependency>
         <dependency>
+            <groupId>com.yomahub</groupId>
+            <artifactId>liteflow-rule-db-publisher</artifactId>
+            <version>${revision}</version>
+        </dependency>
+        <dependency>
             <groupId>com.fasterxml.jackson.core</groupId>
             <artifactId>jackson-databind</artifactId>
         </dependency>

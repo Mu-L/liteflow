@@ -19,8 +19,8 @@ import javax.annotation.PostConstruct;
  * <p>时序保证：{@code @PostConstruct} 在所有单例 bean 实例化阶段执行，而
  * {@code LiteflowExecutorInit}（{@link org.springframework.beans.factory.SmartInitializingSingleton}）
  * 的 {@code afterSingletonsInstantiated} 在所有单例实例化完成后才回调，因此 ruleDb 一定在
- * {@code flowExecutor.init(true)} 之前注入，Rule-DB 模式得以激活；后续 RedisRulePublisher /
- * RedisRuleRepository 读取 {@link com.yomahub.liteflow.property.LiteflowConfigGetter} 时也一致。
+ * {@code flowExecutor.init(true)} 之前注入，Rule-DB 模式得以激活；后续 Redis Provider 和
+ * Repository 读取 {@link com.yomahub.liteflow.property.LiteflowConfigGetter} 时也一致。
  *
  * <p>address 指向 embedded-redis 监听的 16379（非默认端口，避免与开发者本地 redis 冲突）。
  *
@@ -38,9 +38,9 @@ public class RuleDbRedisTestConfig {
 		RuleDbConfig ruleDb = new RuleDbConfig();
 		ruleDb.setEnabled(true);
 		ruleDb.setApplicationName("ruledb-redis-it");
-		ruleDb.setAddress("redis://127.0.0.1:16379");
-		ruleDb.setSeqPollSeconds(1);
-		ruleDb.setReconcileSeconds(60);
+		ruleDb.getRedis().setAddress("redis://127.0.0.1:16379");
+		ruleDb.getSync().setPollSeconds(1);
+		ruleDb.getSync().setReconcileSeconds(60);
 		liteflowConfig.setRuleDb(ruleDb);
 	}
 }
