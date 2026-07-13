@@ -22,6 +22,11 @@ public final class ManualPollingChangeSourceAdapter implements RuleChangeSource,
 	}
 
 	@Override
+	public boolean requiresContinuousSequence() {
+		return delegate.requiresContinuousSequence();
+	}
+
+	@Override
 	public void onReconciled(long baselineSeq) {
 		delegate.onReconciled(baselineSeq);
 	}

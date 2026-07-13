@@ -114,6 +114,24 @@ public class RuleDbChangeSourceTest extends BaseRuleDbTest {
     }
 
     @Test
+    void nativeWatchSequenceGapsDoNotForceReconcile() {
+        InMemoryRuleDbProvider provider = provider();
+        provider.allowSequenceGaps();
+        buildExecutor(new RuleDbConfig());
+        int manifests = InMemoryRuleRepository.FETCH_MANIFEST_COUNT.get();
+
+        provider.emitBatch(Arrays.asList(
+                new ChangeRecord(5, ChangeRecord.TargetType.CHAIN,
+                        "watchA", ChangeRecord.Op.UPSERT, 1),
+                new ChangeRecord(9, ChangeRecord.TargetType.CHAIN,
+                        "watchB", ChangeRecord.Op.UPSERT, 1)));
+
+        Assertions.assertEquals(manifests, InMemoryRuleRepository.FETCH_MANIFEST_COUNT.get());
+        Assertions.assertTrue(FlowBus.containChain("watchA"));
+        Assertions.assertTrue(FlowBus.containChain("watchB"));
+    }
+
+    @Test
     void liveCollisionFailsWithoutReplacingApplicationChain() {
         InMemoryRuleDbProvider provider = provider();
         buildExecutor(new RuleDbConfig());

@@ -14,6 +14,7 @@
         <module>liteflow-rule-db-publisher</module>
         <module>liteflow-rule-db-sql</module>
         <module>liteflow-rule-db-redis</module>
+        <module>liteflow-rule-db-etcd</module>
     </modules>
 
     <artifactId>liteflow-rule-db</artifactId>

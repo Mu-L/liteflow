@@ -57,6 +57,10 @@ public class InMemoryRuleDbProvider implements RuleDbProvider {
         changeSource.requestReconcile();
     }
 
+    public void allowSequenceGaps() {
+        changeSource.continuousSequence = false;
+    }
+
     public void emitLate(ChangeRecord change) {
         changeSource.emitLate(change);
     }
@@ -122,6 +126,7 @@ public class InMemoryRuleDbProvider implements RuleDbProvider {
         private int openCalls;
         private int activateCalls;
         private int closeCalls;
+        private boolean continuousSequence = true;
 
         @Override
         public void open(RuleChangeListener listener) {
@@ -157,6 +162,11 @@ public class InMemoryRuleDbProvider implements RuleDbProvider {
             if (startDelivery) {
                 drain();
             }
+        }
+
+        @Override
+        public boolean requiresContinuousSequence() {
+            return continuousSequence;
         }
 
         /** Emit a change, buffering it until activation. */

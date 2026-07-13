@@ -10,6 +10,11 @@ public interface RuleChangeSource extends AutoCloseable {
 
 	void activate(long baselineSeq);
 
+	/** Whether delivered sequence values must increase without gaps. */
+	default boolean requiresContinuousSequence() {
+		return true;
+	}
+
 	/** A successful full reconcile established a new authoritative cursor. */
 	default void onReconciled(long baselineSeq) {
 	}
