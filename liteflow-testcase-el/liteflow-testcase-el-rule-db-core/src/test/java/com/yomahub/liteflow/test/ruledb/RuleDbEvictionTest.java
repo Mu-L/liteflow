@@ -17,7 +17,7 @@ public class RuleDbEvictionTest extends BaseRuleDbTest {
 		}
 		registerCommonCmp();
 		RuleDbConfig cfg = new RuleDbConfig();
-		cfg.setCacheCapacity(2); // 小容量强制淘汰
+		cfg.getCache().setCapacity(2); // 小容量强制淘汰
 		FlowExecutor executor = buildExecutor(cfg);
 
 		for (int i = 1; i <= 6; i++) {
@@ -49,7 +49,7 @@ public class RuleDbEvictionTest extends BaseRuleDbTest {
 		InMemoryRuleRepository.putScript("sx2", "defaultContext.setData(\"sx2\", true);", "script", "groovy");
 		registerCommonCmp();
 		RuleDbConfig cfg = new RuleDbConfig();
-		cfg.setCacheCapacity(1); // 一次只容一个 chain
+		cfg.getCache().setCapacity(1); // 一次只容一个 chain
 		FlowExecutor executor = buildExecutor(cfg);
 
 		executor.execute2Resp("cs1", "arg");
@@ -72,7 +72,7 @@ public class RuleDbEvictionTest extends BaseRuleDbTest {
 		InMemoryRuleRepository.putScript("sh1", "defaultContext.setData(\"sh1\", true);", "script", "groovy");
 		registerCommonCmp();
 		RuleDbConfig cfg = new RuleDbConfig();
-		cfg.setCacheCapacity(1);
+		cfg.getCache().setCapacity(1);
 		FlowExecutor executor = buildExecutor(cfg);
 
 		executor.execute2Resp("csA", "arg");

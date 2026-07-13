@@ -105,7 +105,8 @@ public class LiteflowProperty {
 	private com.yomahub.liteflow.property.agent.AgentConfig agent;
 
 	// rule-db配置
-	private com.yomahub.liteflow.property.RuleDbConfig ruleDb;
+	private com.yomahub.liteflow.property.RuleDbConfig ruleDb =
+			new com.yomahub.liteflow.property.RuleDbConfig();
 
 	// 规则缓存配置
 	private ChainCacheProperty chainCache;

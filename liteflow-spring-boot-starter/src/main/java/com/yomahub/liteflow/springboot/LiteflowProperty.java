@@ -113,7 +113,8 @@ public class LiteflowProperty {
 
 	// Rule-DB配置
 	@NestedConfigurationProperty
-	private com.yomahub.liteflow.property.RuleDbConfig ruleDb;
+	private com.yomahub.liteflow.property.RuleDbConfig ruleDb =
+			new com.yomahub.liteflow.property.RuleDbConfig();
 
 	public static class ChainCacheProperty {
 		// 是否启用规则缓存

@@ -209,8 +209,8 @@ public class RuleDbRuntime {
 			// 初始化有界缓存（容量按 chain 条数）
 			int capacity = 500;
 			RuleDbConfig cacheCfg = LiteflowConfigGetter.get().getRuleDb();
-			if (cacheCfg != null && cacheCfg.getCacheCapacity() != null) {
-				capacity = cacheCfg.getCacheCapacity();
+			if (cacheCfg != null && cacheCfg.getCache() != null && cacheCfg.getCache().getCapacity() != null) {
+				capacity = cacheCfg.getCache().getCapacity();
 			}
 			RuleDbCache.init(capacity);
 
@@ -249,10 +249,11 @@ public class RuleDbRuntime {
 
 	private static void preload() {
 		RuleDbConfig ruleDb = LiteflowConfigGetter.get().getRuleDb();
-		if (ruleDb == null || StrUtil.isBlank(ruleDb.getPreloadChainIds())) {
+		if (ruleDb == null || ruleDb.getCache() == null
+				|| StrUtil.isBlank(ruleDb.getCache().getPreloadChainIds())) {
 			return;
 		}
-		for (String chainId : ruleDb.getPreloadChainIds().split(",")) {
+		for (String chainId : ruleDb.getCache().getPreloadChainIds().split(",")) {
 			String trimmed = chainId.trim();
 			if (StrUtil.isNotBlank(trimmed) && isLive(CHAIN_STATES.get(trimmed))) {
 				try {
@@ -786,7 +787,8 @@ public class RuleDbRuntime {
 
 	private static int retryTimes() {
 		RuleDbConfig ruleDb = LiteflowConfigGetter.get().getRuleDb();
-		return ruleDb == null || ruleDb.getFetchRetryTimes() == null ? 3 : ruleDb.getFetchRetryTimes();
+		return ruleDb == null || ruleDb.getSync() == null || ruleDb.getSync().getFetchRetryTimes() == null
+				? 3 : ruleDb.getSync().getFetchRetryTimes();
 	}
 
 	private static RuleRepository repositoryForRead() {

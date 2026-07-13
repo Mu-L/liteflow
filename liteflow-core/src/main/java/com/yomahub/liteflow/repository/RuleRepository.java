@@ -57,7 +57,7 @@ public interface RuleRepository {
 	}
 
 	/**
-	 * seq 轮询的插件级默认周期（秒），仅在 liteflow.rule-db.seq-poll-seconds 未配置时生效。
+	 * seq 轮询的插件级默认周期（秒），仅在 liteflow.rule-db.sync.poll-seconds 未配置时生效。
 	 * 无推送通道的实现（SQL）轮询是唯一感知手段，默认激进（3s）；
 	 * 有推送通道的实现（Redis）轮询只是丢消息兜底，应覆写为更宽松的值（30s）。
 	 */

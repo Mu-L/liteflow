@@ -213,8 +213,8 @@ final class LegacyRuleChangeSource implements RuleChangeSource, ManualPollingCha
 				return;
 			}
 			RuleDbConfig config = LiteflowConfigGetter.get().getRuleDb();
-			int seconds = config != null && config.getSeqPollSeconds() != null
-					? config.getSeqPollSeconds() : repository.defaultSeqPollSeconds();
+			int seconds = config != null && config.getSync() != null && config.getSync().getPollSeconds() != null
+					? config.getSync().getPollSeconds() : repository.defaultSeqPollSeconds();
 			pollScheduler = Executors.newSingleThreadScheduledExecutor(daemonFactory());
 			pollScheduler.scheduleWithFixedDelay(this::pollOnce, seconds, seconds, TimeUnit.SECONDS);
 		}

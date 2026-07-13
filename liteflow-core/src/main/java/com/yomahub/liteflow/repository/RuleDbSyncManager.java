@@ -125,8 +125,8 @@ public class RuleDbSyncManager {
 			return;
 		}
 		RuleDbConfig cfg = LiteflowConfigGetter.get().getRuleDb();
-		int reconcile = cfg == null || cfg.getReconcileSeconds() == null
-				? 60 : cfg.getReconcileSeconds();
+		int reconcile = cfg == null || cfg.getSync() == null || cfg.getSync().getReconcileSeconds() == null
+				? 60 : cfg.getSync().getReconcileSeconds();
 		reconcileScheduler = Executors.newSingleThreadScheduledExecutor(
 				daemonFactory("liteflow-rule-db-sync-reconcile"));
 		reconcileScheduler.scheduleWithFixedDelay(RuleDbSyncManager::reconcileOnceSafe,

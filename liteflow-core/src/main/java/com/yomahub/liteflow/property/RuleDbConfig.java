@@ -1,7 +1,7 @@
 package com.yomahub.liteflow.property;
 
 /**
- * Rule-DB 模式统一配置（liteflow.rule-db.*），SQL/Redis 字段取并集，插件各取所需
+ * Rule-DB execution configuration grouped by responsibility and backend.
  *
  * @author Bryan.Zhang
  * @since 2.16.1
@@ -12,47 +12,17 @@ public class RuleDbConfig {
 
 	private String applicationName;
 
-	private Integer cacheCapacity = 500;
+	private RuleDbCacheConfig cache = new RuleDbCacheConfig();
 
-	// null=插件默认（SQL:3 / Redis:30）
-	private Integer seqPollSeconds;
+	private RuleDbSyncConfig sync = new RuleDbSyncConfig();
 
-	private Integer reconcileSeconds = 60;
+	private RuleDbSqlConfig sql = new RuleDbSqlConfig();
 
-	// 逗号分隔
-	private String preloadChainIds;
+	private RuleDbRedisConfig redis = new RuleDbRedisConfig();
 
-	private Integer fetchRetryTimes = 3;
+	private RuleDbEtcdConfig etcd = new RuleDbEtcdConfig();
 
-	// ---- SQL ----
-	private String url;
-
-	private String username;
-
-	private String password;
-
-	// 空则由 url 推断
-	private String driverClassName;
-
-	// 空则自动查找容器 DataSource
-	private String datasourceBeanName;
-
-	private String tablePrefix = "lf_";
-
-	private Boolean autoInitTable = Boolean.FALSE;
-
-	// ---- Redis ----
-	// 多地址逗号分隔
-	private String address;
-
-	// 配置即哨兵模式
-	private String masterName;
-
-	private Integer database = 0;
-
-	private String keyPrefix = "lf";
-
-	private String redissonBeanName;
+	private RuleDbZkConfig zk = new RuleDbZkConfig();
 
 	public Boolean getEnabled() {
 		return enabled;
@@ -70,140 +40,51 @@ public class RuleDbConfig {
 		this.applicationName = applicationName;
 	}
 
-	public Integer getCacheCapacity() {
-		return cacheCapacity;
+	public RuleDbCacheConfig getCache() {
+		return cache;
 	}
 
-	public void setCacheCapacity(Integer cacheCapacity) {
-		this.cacheCapacity = cacheCapacity;
+	public void setCache(RuleDbCacheConfig cache) {
+		this.cache = cache;
 	}
 
-	public Integer getSeqPollSeconds() {
-		return seqPollSeconds;
+	public RuleDbSyncConfig getSync() {
+		return sync;
 	}
 
-	public void setSeqPollSeconds(Integer seqPollSeconds) {
-		this.seqPollSeconds = seqPollSeconds;
+	public void setSync(RuleDbSyncConfig sync) {
+		this.sync = sync;
 	}
 
-	public Integer getReconcileSeconds() {
-		return reconcileSeconds;
+	public RuleDbSqlConfig getSql() {
+		return sql;
 	}
 
-	public void setReconcileSeconds(Integer reconcileSeconds) {
-		this.reconcileSeconds = reconcileSeconds;
+	public void setSql(RuleDbSqlConfig sql) {
+		this.sql = sql;
 	}
 
-	public String getPreloadChainIds() {
-		return preloadChainIds;
+	public RuleDbRedisConfig getRedis() {
+		return redis;
 	}
 
-	public void setPreloadChainIds(String preloadChainIds) {
-		this.preloadChainIds = preloadChainIds;
+	public void setRedis(RuleDbRedisConfig redis) {
+		this.redis = redis;
 	}
 
-	public Integer getFetchRetryTimes() {
-		return fetchRetryTimes;
+	public RuleDbEtcdConfig getEtcd() {
+		return etcd;
 	}
 
-	public void setFetchRetryTimes(Integer fetchRetryTimes) {
-		this.fetchRetryTimes = fetchRetryTimes;
+	public void setEtcd(RuleDbEtcdConfig etcd) {
+		this.etcd = etcd;
 	}
 
-	public String getUrl() {
-		return url;
+	public RuleDbZkConfig getZk() {
+		return zk;
 	}
 
-	public void setUrl(String url) {
-		this.url = url;
+	public void setZk(RuleDbZkConfig zk) {
+		this.zk = zk;
 	}
-
-	public String getUsername() {
-		return username;
-	}
-
-	public void setUsername(String username) {
-		this.username = username;
-	}
-
-	public String getPassword() {
-		return password;
-	}
-
-	public void setPassword(String password) {
-		this.password = password;
-	}
-
-	public String getDriverClassName() {
-		return driverClassName;
-	}
-
-	public void setDriverClassName(String driverClassName) {
-		this.driverClassName = driverClassName;
-	}
-
-	public String getDatasourceBeanName() {
-		return datasourceBeanName;
-	}
-
-	public void setDatasourceBeanName(String datasourceBeanName) {
-		this.datasourceBeanName = datasourceBeanName;
-	}
-
-	public String getTablePrefix() {
-		return tablePrefix;
-	}
-
-	public void setTablePrefix(String tablePrefix) {
-		this.tablePrefix = tablePrefix;
-	}
-
-	public Boolean getAutoInitTable() {
-		return autoInitTable;
-	}
-
-	public void setAutoInitTable(Boolean autoInitTable) {
-		this.autoInitTable = autoInitTable;
-	}
-
-	public String getAddress() {
-		return address;
-	}
-
-	public void setAddress(String address) {
-		this.address = address;
-	}
-
-	public String getMasterName() {
-		return masterName;
-	}
-
-	public void setMasterName(String masterName) {
-		this.masterName = masterName;
-	}
-
-	public Integer getDatabase() {
-		return database;
-	}
-
-	public void setDatabase(Integer database) {
-		this.database = database;
-	}
-
-	public String getKeyPrefix() {
-		return keyPrefix;
-	}
-
-	public void setKeyPrefix(String keyPrefix) {
-		this.keyPrefix = keyPrefix;
-	}
-
-	public String getRedissonBeanName() {
-		return redissonBeanName;
-	}
-
-	public void setRedissonBeanName(String redissonBeanName) {
-		this.redissonBeanName = redissonBeanName;
-	}
-
 }

@@ -74,7 +74,7 @@ public class RuleDbLazyLoadTest extends BaseRuleDbTest {
 		InMemoryRuleRepository.putChain("chainLazy", "THEN(b, a)");
 		registerCommonCmp();
 		RuleDbConfig cfg = new RuleDbConfig();
-		cfg.setPreloadChainIds("chainP");
+		cfg.getCache().setPreloadChainIds("chainP");
 		FlowExecutor executor = buildExecutor(cfg);
 
 		// 预热清单中的 chain 启动即回源编译，其余保持影子
@@ -92,7 +92,7 @@ public class RuleDbLazyLoadTest extends BaseRuleDbTest {
 		InMemoryRuleRepository.putChain("chain1", "THEN(a, b)");
 		registerCommonCmp();
 		RuleDbConfig cfg = new RuleDbConfig();
-		cfg.setFetchRetryTimes(1);
+		cfg.getSync().setFetchRetryTimes(1);
 		FlowExecutor executor = buildExecutor(cfg);
 
 		InMemoryRuleRepository.DOWN = true;

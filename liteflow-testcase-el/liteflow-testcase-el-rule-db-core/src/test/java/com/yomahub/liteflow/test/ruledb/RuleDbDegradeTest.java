@@ -43,7 +43,7 @@ public class RuleDbDegradeTest extends BaseRuleDbTest {
 		InMemoryRuleRepository.putChain("chain2", "THEN(b, a)");
 		registerCommonCmp();
 		RuleDbConfig cfg = new RuleDbConfig();
-		cfg.setFetchRetryTimes(1);
+		cfg.getSync().setFetchRetryTimes(1);
 		FlowExecutor executor = buildExecutor(cfg);
 		executor.execute2Resp("chain1", "arg"); // 只缓存 chain1
 
