@@ -235,7 +235,6 @@ public class SqlRuleRepository implements RuleRepository {
 		}
 	}
 
-	@Override
 	public long fetchLatestSeq() {
 		String sql = "SELECT MAX(seq) FROM " + dialect.changeLogTable() + " WHERE application_name = ?";
 		try (Connection c = conn(); PreparedStatement ps = c.prepareStatement(sql)) {
@@ -252,7 +251,6 @@ public class SqlRuleRepository implements RuleRepository {
 		}
 	}
 
-	@Override
 	public List<ChangeRecord> fetchChangesSince(long seq) {
 		// 断档检测：若存在记录但最小 seq 已大于 seq+1，说明中间被清理
 		String minSql = "SELECT MIN(seq) FROM " + dialect.changeLogTable() + " WHERE application_name = ?";

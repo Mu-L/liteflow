@@ -1,7 +1,7 @@
 package com.yomahub.liteflow.repository.vo;
 
 /**
- * Rule-DB 模式变更日志中的一条增量记录，由 {@code RuleRepository.fetchChangesSince(seq)} 返回。
+ * Backend-neutral rule change delivered by a {@code RuleChangeSource}.
  *
  * @author Bryan.Zhang
  * @since 2.16.1

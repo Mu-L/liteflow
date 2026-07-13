@@ -7,8 +7,8 @@ import com.yomahub.liteflow.flow.FlowBus;
 import com.yomahub.liteflow.property.LiteflowConfig;
 import com.yomahub.liteflow.property.LiteflowConfigGetter;
 import com.yomahub.liteflow.property.RuleDbConfig;
+import com.yomahub.liteflow.repository.RuleDbProviderHolder;
 import com.yomahub.liteflow.repository.RuleDbRuntime;
-import com.yomahub.liteflow.repository.RuleRepositoryHolder;
 import com.yomahub.liteflow.test.ruledb.cmp.ACmp;
 import com.yomahub.liteflow.test.ruledb.cmp.BCmp;
 import com.yomahub.liteflow.test.ruledb.cmp.CCmp;
@@ -23,7 +23,7 @@ public abstract class BaseRuleDbTest {
         // 销毁 Rule-DB 运行时（索引/缓存态/initialized 标志），重置 SPI 解析，
         // 并清理 FlowExecutorHolder 单例与全局配置，避免多个测试类之间状态泄漏
         RuleDbRuntime.destroy();
-        RuleRepositoryHolder.reset();
+        RuleDbProviderHolder.reset();
         FlowExecutorHolder.clean();
         FlowBus.cleanCache();
         FlowBus.clearStat();

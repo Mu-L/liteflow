@@ -140,12 +140,7 @@ public class RuleDbRuntime {
 	private static volatile boolean initialized = false;
 	private static volatile RuleRepository activeRepository;
 
-	/**
-	 * isActive() 结果缓存：该标志在运行期不会改变（SPI 实现是否在 classpath、enabled 配置均固定），
-	 * 但每次 buildUnCompileChain/compileScriptNode 都会调用，而 RuleRepositoryHolder.hasImplementation()
-	 * 内部的 get() 是 synchronized —— 缓存后彻底脱离 holder 监视器热路径。
-	 * destroy() 置 null，下次 init 重算（也使非 rule-db 应用在 destroy 后不残留过期 true）。
-	 */
+	/** Cached because provider discovery and enabled configuration are stable during one runtime lifecycle. */
 	private static volatile Boolean activeFlag;
 
 	public static boolean isActive() {
@@ -153,7 +148,7 @@ public class RuleDbRuntime {
 		if (cached != null) {
 			return cached;
 		}
-		if (!RuleRepositoryHolder.hasImplementation()) {
+		if (!RuleDbProviderHolder.hasImplementation()) {
 			activeFlag = Boolean.FALSE;
 			return false;
 		}
@@ -169,18 +164,9 @@ public class RuleDbRuntime {
 		if (initialized) {
 			return;
 		}
-		// Resolve the legacy SPI first so a classpath containing both integration
-		// styles fails deterministically instead of silently preferring a provider.
-		RuleRepositoryHolder.get();
 		RuleDbProvider provider = RuleDbProviderHolder.get();
 		if (provider == null) {
-			// Transitional RuleRepository implementations remain usable until their
-			// unified provider adapters are introduced.
-			RuleRepository legacyRepository = RuleRepositoryHolder.get();
-			if (legacyRepository == null) {
-				return;
-			}
-			provider = legacyProvider(legacyRepository);
+			return;
 		}
 
 		try {
@@ -223,28 +209,6 @@ public class RuleDbRuntime {
 			clearRuntimeState();
 			throw e;
 		}
-	}
-
-	private static RuleDbProvider legacyProvider(RuleRepository repository) {
-		return new RuleDbProvider() {
-			private final LegacyRuleChangeSource source = new LegacyRuleChangeSource(repository);
-
-			@Override
-			public RuleRepository repository() {
-				return repository;
-			}
-
-			@Override
-			public RuleChangeSource changeSource() {
-				return source;
-			}
-
-			@Override
-			public void close() {
-				source.close();
-				repository.close();
-			}
-		};
 	}
 
 	private static void preload() {
@@ -800,7 +764,7 @@ public class RuleDbRuntime {
 		if (provider != null && provider.repository() != null) {
 			return provider.repository();
 		}
-		return RuleRepositoryHolder.get();
+		return null;
 	}
 
 	/** 编译完成后登记：chain 驻留缓存 + 收集引用的脚本节点（引用计数+1） */
@@ -1366,7 +1330,6 @@ public class RuleDbRuntime {
 		SCRIPT_STATES.clear();
 		LAST_APPLIED_SEQ.set(0);
 		activeRepository = null;
-		RuleRepositoryHolder.clearCached();
 		initialized = false;
 	}
 }

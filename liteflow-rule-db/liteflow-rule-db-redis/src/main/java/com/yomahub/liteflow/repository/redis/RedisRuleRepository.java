@@ -153,13 +153,11 @@ public class RedisRuleRepository implements RuleRepository {
 				valueOrNull(metadata.get("name")));
 	}
 
-	@Override
 	public long fetchLatestSeq() {
 		String value = redisson().<String>getBucket(keys.seq(), StringCodec.INSTANCE).get();
 		return parseLong(value);
 	}
 
-	@Override
 	public List<ChangeRecord> fetchChangesSince(long seq) {
 		RScoredSortedSet<String> log = redisson().getScoredSortedSet(keys.changelog(), StringCodec.INSTANCE);
 		Collection<ScoredEntry<String>> firstEntry = log.entryRange(0, 0);
@@ -179,7 +177,6 @@ public class RedisRuleRepository implements RuleRepository {
 		return changes;
 	}
 
-	@Override
 	public void close() {
 		connectionManager.shutdown();
 	}

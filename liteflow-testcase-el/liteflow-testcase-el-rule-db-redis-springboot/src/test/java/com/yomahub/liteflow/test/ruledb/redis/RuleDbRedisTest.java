@@ -146,11 +146,6 @@ public class RuleDbRedisTest {
 	}
 
 	@Test
-	public void testRedisDefaultSeqPollSecondsIsRelaxed() {
-		Assertions.assertEquals(3, repository.defaultSeqPollSeconds());
-	}
-
-	@Test
 	public void testLuaPublishProtocolStructures() {
 		long before = repository.fetchLatestSeq();
 

@@ -44,6 +44,5 @@ public class SqlRuleDbProvider implements RuleDbProvider {
 	@Override
 	public void close() {
 		changeSource.close();
-		repository.close();
 	}
 }

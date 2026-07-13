@@ -202,13 +202,11 @@ public class InMemoryRuleRepository implements RuleRepository {
                 r.getType(), r.getLanguage(), r.getName());
     }
 
-    @Override
     public long fetchLatestSeq() {
         checkDown();
         return SEQ.get();
     }
 
-    @Override
     public List<ChangeRecord> fetchChangesSince(long seq) {
         checkDown();
         if (seq + 1 < MIN_SEQ) {
