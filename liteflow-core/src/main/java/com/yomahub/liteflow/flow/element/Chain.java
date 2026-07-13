@@ -18,6 +18,7 @@ import com.yomahub.liteflow.common.ChainConstant;
 import com.yomahub.liteflow.enums.ExecuteableTypeEnum;
 import com.yomahub.liteflow.exception.ChainEndException;
 import com.yomahub.liteflow.exception.FlowSystemException;
+import com.yomahub.liteflow.flow.FlowBus;
 import com.yomahub.liteflow.lifecycle.LifeCycleHolder;
 import com.yomahub.liteflow.log.LFLog;
 import com.yomahub.liteflow.log.LFLoggerManager;
@@ -178,6 +179,16 @@ public class Chain implements Executable {
 	}
 
 	public void executeRoute(Integer slotIndex) throws Exception {
+		if (com.yomahub.liteflow.repository.RuleDbRuntime.isChainStale(chainId)) {
+			LiteFlowChainELBuilder.buildUnCompileChain(this);
+		}
+		if (BooleanUtil.isFalse(isCompiled)) {
+			synchronized (this) {
+				if (BooleanUtil.isFalse(isCompiled)) {
+					LiteFlowChainELBuilder.buildUnCompileChain(this);
+				}
+			}
+		}
 		if (routeItem == null) {
 			throw new FlowSystemException("no route condition or node in this chain[" + chainId + "]");
 		}
@@ -289,6 +300,7 @@ public class Chain implements Executable {
 	}
 
 	public synchronized void installCompiledRule(Chain candidate) {
+		String oldElMd5 = this.elMd5;
 		this.el = candidate.getEl();
 		this.elMd5 = candidate.getElMd5();
 		this.routeEl = candidate.getRouteEl();
@@ -296,6 +308,7 @@ public class Chain implements Executable {
 		this.namespace = candidate.getNamespace();
 		this.conditionList = candidate.getConditionList();
 		this.isCompiled = candidate.isCompiled();
+		FlowBus.refreshElMd5Mapping(this, oldElMd5, this.elMd5);
 	}
 
 	public boolean isAbstract() {

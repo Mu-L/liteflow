@@ -440,6 +440,22 @@ public class FlowBus {
 		return elMd5Map.get(elMd5);
 	}
 
+	/** Refreshes one published chain's EL lookup without touching another chain's mapping. */
+	public static synchronized boolean refreshElMd5Mapping(Chain chain, String oldElMd5, String newElMd5) {
+		if (chain == null || chainMap.get(chain.getChainId()) != chain) {
+			return false;
+		}
+		String chainId = chain.getChainId();
+		if (StrUtil.isNotBlank(oldElMd5) && !Objects.equals(oldElMd5, newElMd5)) {
+			elMd5Map.remove(oldElMd5, chainId);
+		}
+		if (StrUtil.isBlank(newElMd5)) {
+			return true;
+		}
+		String existing = elMd5Map.putIfAbsent(newElMd5, chainId);
+		return existing == null || Objects.equals(existing, chainId);
+	}
+
 	public static boolean removeChain(String chainId) {
 		if (containChain(chainId)) {
 			Chain removedChain = chainMap.remove(chainId);

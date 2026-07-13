@@ -39,6 +39,7 @@ import com.yomahub.liteflow.parser.factory.FlowParserProvider;
 import com.yomahub.liteflow.parser.spi.ParserClassNameSpi;
 import com.yomahub.liteflow.property.LiteflowConfig;
 import com.yomahub.liteflow.property.LiteflowConfigGetter;
+import com.yomahub.liteflow.repository.RuleDbRuntime;
 import com.yomahub.liteflow.slot.DataBus;
 import com.yomahub.liteflow.slot.DefaultContext;
 import com.yomahub.liteflow.slot.Slot;
@@ -689,6 +690,10 @@ public class FlowExecutor {
 
 		if (StrUtil.isBlank(namespace)){
 			namespace = ChainConstant.DEFAULT_NAMESPACE;
+		}
+
+		if (RuleDbRuntime.isActive()) {
+			RuleDbRuntime.prepareRouteChains();
 		}
 
 		String finalNamespace = namespace;

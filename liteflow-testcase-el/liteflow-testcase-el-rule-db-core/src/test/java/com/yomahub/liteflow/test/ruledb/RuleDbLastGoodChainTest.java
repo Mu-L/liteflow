@@ -1,6 +1,11 @@
 package com.yomahub.liteflow.test.ruledb;
 
+import cn.hutool.crypto.digest.MD5;
+import com.yomahub.liteflow.builder.LiteFlowNodeBuilder;
+import com.yomahub.liteflow.builder.el.LiteFlowChainELBuilder;
 import com.yomahub.liteflow.core.FlowExecutor;
+import com.yomahub.liteflow.core.NodeBooleanComponent;
+import com.yomahub.liteflow.exception.NoMatchedRouteChainException;
 import com.yomahub.liteflow.flow.FlowBus;
 import com.yomahub.liteflow.flow.LiteflowResponse;
 import com.yomahub.liteflow.property.RuleDbConfig;
@@ -9,6 +14,7 @@ import com.yomahub.liteflow.repository.RuleDbSyncManager;
 import com.yomahub.liteflow.repository.runtime.RuleTargetState;
 import com.yomahub.liteflow.repository.runtime.RuleTargetStatus;
 import com.yomahub.liteflow.slot.DefaultContext;
+import com.yomahub.liteflow.util.ElRegexUtil;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
 
@@ -21,6 +27,80 @@ import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 
 public class RuleDbLastGoodChainTest extends BaseRuleDbTest {
+
+	@Test
+	public void testColdRouteQueryLoadsRuleDbMetadataOnDemand() {
+		putRouteChain("route1", "THEN(a, b)", "route", "orders");
+		registerCommonCmp();
+		registerRouteCmp();
+		FlowExecutor executor = buildExecutor(new RuleDbConfig());
+
+		List<LiteflowResponse> responses = executor.executeRouteChain("orders", true, DefaultContext.class);
+
+		Assertions.assertEquals(1, responses.size());
+		Assertions.assertEquals("route1", responses.get(0).getChainId());
+		Assertions.assertEquals("a==>b", responses.get(0).getExecuteStepStr());
+		Assertions.assertEquals(1L, RuleDbRuntime.chainState("route1").getActiveVersion());
+	}
+
+	@Test
+	public void testRouteQueryRefreshesVersionTwoRoute() {
+		putRouteChain("route1", "THEN(a)", "route", "orders");
+		registerCommonCmp();
+		registerRouteCmp();
+		FlowExecutor executor = buildExecutor(new RuleDbConfig());
+		Assertions.assertEquals(1,
+				executor.executeRouteChain("orders", true, DefaultContext.class).size());
+
+		publishRouteChain("route1", "THEN(a)", "NOT(route)", "orders");
+		RuleDbSyncManager.pollOnce();
+
+		Assertions.assertThrows(NoMatchedRouteChainException.class,
+				() -> executor.executeRouteChain("orders", true, DefaultContext.class));
+		Assertions.assertEquals(2L, RuleDbRuntime.chainState("route1").getActiveVersion());
+	}
+
+	@Test
+	public void testExecuteWithElReusesLoadedRuleDbChain() {
+		FlowExecutor executor = loadVersionOne("THEN(a, b)");
+
+		LiteflowResponse response = executor.execute2RespWithEL("THEN(a, b)");
+
+		Assertions.assertTrue(response.isSuccess());
+		Assertions.assertEquals("chain1", response.getChainId());
+	}
+
+	@Test
+	public void testRuleDbElMappingDoesNotOverwriteAnotherChain() {
+		String el = "THEN(a, b)";
+		InMemoryRuleRepository.putChain("chain1", el);
+		registerCommonCmp();
+		FlowExecutor executor = buildExecutor(new RuleDbConfig());
+		LiteFlowChainELBuilder.createChain().setChainId("application").setEL(el).build();
+
+		Assertions.assertTrue(executor.execute2Resp("chain1", "arg").isSuccess());
+
+		Assertions.assertEquals("application", FlowBus.getChainIdByElMd5(elMd5(el)));
+	}
+
+	@Test
+	public void testVersionTwoReplacesRuleDbElMd5Mapping() {
+		String versionOneEl = "THEN(a, b)";
+		String versionTwoEl = "THEN(b, a)";
+		FlowExecutor executor = loadVersionOne(versionOneEl);
+		String versionOneMd5 = elMd5(versionOneEl);
+		Assertions.assertEquals("chain1", FlowBus.getChainIdByElMd5(versionOneMd5));
+
+		InMemoryRuleRepository.publishChain("chain1", versionTwoEl);
+		RuleDbSyncManager.pollOnce();
+		Assertions.assertTrue(executor.execute2Resp("chain1", "arg").isSuccess());
+
+		String versionTwoMd5 = elMd5(versionTwoEl);
+		Assertions.assertNull(FlowBus.getChainIdByElMd5(versionOneMd5));
+		Assertions.assertEquals("chain1", FlowBus.getChainIdByElMd5(versionTwoMd5));
+		Assertions.assertEquals("chain1", executor.execute2RespWithEL(versionTwoEl).getChainId());
+		Assertions.assertNotEquals("chain1", executor.execute2RespWithEL(versionOneEl).getChainId());
+	}
 
 	@Test
 	public void testInvalidNewElKeepsVersionOneExecutable() {
@@ -224,6 +304,33 @@ public class RuleDbLastGoodChainTest extends BaseRuleDbTest {
 		Assertions.assertTrue(response.isSuccess());
 		Assertions.assertEquals(1L, RuleDbRuntime.chainState("chain1").getActiveVersion());
 		return executor;
+	}
+
+	private void registerRouteCmp() {
+		LiteFlowNodeBuilder.createBooleanNode().setId("route").setClazz(RouteCmp.class).build();
+	}
+
+	private static void putRouteChain(String chainId, String el, String route, String namespace) {
+		InMemoryRuleRepository.putChain(chainId, el, namespace);
+		InMemoryRuleRepository.CHAINS.get(chainId).setRoute(route);
+	}
+
+	private static void publishRouteChain(String chainId, String el, String route, String namespace) {
+		InMemoryRuleRepository.publishChain(chainId, el);
+		InMemoryRuleRepository.CHAINS.get(chainId).setRoute(route);
+		InMemoryRuleRepository.CHAINS.get(chainId).setNamespace(namespace);
+	}
+
+	private static String elMd5(String el) {
+		return MD5.create().digestHex(ElRegexUtil.normalize(el));
+	}
+
+	public static class RouteCmp extends NodeBooleanComponent {
+
+		@Override
+		public boolean processBoolean() {
+			return Boolean.TRUE.equals(this.<Boolean>getRequestData());
+		}
 	}
 
 	private static void await(CountDownLatch latch) {

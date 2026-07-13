@@ -267,6 +267,27 @@ public class RuleDbRuntime {
 		return state != null && state.getStatus() != RuleTargetStatus.DELETED;
 	}
 
+	/** Loads Rule-DB shadows whose route metadata is still unknown or stale. */
+	public static void prepareRouteChains() {
+		List<Chain> candidates = new ArrayList<>();
+		synchronized (RuleDbRuntime.class) {
+			for (Map.Entry<String, Chain> entry : SHADOW_CHAINS.entrySet()) {
+				RuleTargetState state = CHAIN_STATES.get(entry.getKey());
+				if (isLive(state) && state.getStatus() != RuleTargetStatus.READY) {
+					candidates.add(entry.getValue());
+				}
+			}
+		}
+		for (Chain chain : candidates) {
+			try {
+				loadAndInstallChainCandidate(chain);
+			}
+			catch (RuntimeException e) {
+				LOG.warn("prepare route chain[{}] failed: {}", chain.getChainId(), e.getMessage());
+			}
+		}
+	}
+
 	/** Builds a stable candidate off-bus and installs it only after compilation succeeds. */
 	public static boolean loadAndInstallChainCandidate(Chain chain) {
 		if (chain == null) {
