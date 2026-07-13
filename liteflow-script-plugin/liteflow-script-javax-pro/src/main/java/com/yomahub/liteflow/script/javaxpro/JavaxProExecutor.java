@@ -209,11 +209,12 @@ public class JavaxProExecutor extends ScriptExecutor {
     }
 
     private NodeComponent getExecutableCmp(ScriptExecuteWrap wrap){
-        if (!compiledScriptMap.containsKey(wrap.getNodeId())) {
+        String scriptNodeId = wrap.getScriptNodeId();
+        if (!compiledScriptMap.containsKey(scriptNodeId)) {
             String errorMsg = StrUtil.format("script for node[{}] is not loaded", wrap.getNodeId());
             throw new ScriptLoadException(errorMsg);
         }
-        NodeComponent cmp = compiledScriptMap.get(wrap.getNodeId());
+        NodeComponent cmp = compiledScriptMap.get(scriptNodeId);
         cmp.setRefNode(wrap.getCmp().getRefNode());
         cmp.setNodeId(wrap.getNodeId());
         cmp.setType(wrap.getCmp().getType());

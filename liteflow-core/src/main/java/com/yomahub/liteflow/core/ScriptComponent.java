@@ -36,6 +36,7 @@ public interface ScriptComponent {
 		ScriptExecuteWrap wrap = new ScriptExecuteWrap();
 		wrap.setCurrChainId(thisCmp.getCurrChainId());
 		wrap.setNodeId(thisCmp.getNodeId());
+		wrap.setScriptNodeId(thisCmp.getRefNode().getExecutingScriptArtifactId());
 		wrap.setSlotIndex(thisCmp.getSlotIndex());
 		wrap.setTag(thisCmp.getTag());
 		wrap.setLoopIndex(thisCmp.getLoopIndex());

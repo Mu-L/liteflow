@@ -61,11 +61,12 @@ public class JavaxExecutor extends ScriptExecutor {
 
     @Override
     public Object executeScript(ScriptExecuteWrap wrap) throws Exception {
-        if (!compiledScriptMap.containsKey(wrap.getNodeId())) {
+        String scriptNodeId = wrap.getScriptNodeId();
+        if (!compiledScriptMap.containsKey(scriptNodeId)) {
             String errorMsg = StrUtil.format("script for node[{}] is not loaded", wrap.getNodeId());
             throw new ScriptLoadException(errorMsg);
         }
-        Execable execable = compiledScriptMap.get(wrap.getNodeId());
+        Execable execable = compiledScriptMap.get(scriptNodeId);
         return execable.exec(Utils.asMap("_meta", wrap));
     }
 

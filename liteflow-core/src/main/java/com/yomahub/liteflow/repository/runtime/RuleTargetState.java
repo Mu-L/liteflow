@@ -127,6 +127,14 @@ public final class RuleTargetState {
 		return true;
 	}
 
+	public synchronized boolean markStale() {
+		if (status == RuleTargetStatus.DELETED || activeVersion.get() == 0) {
+			return false;
+		}
+		status = RuleTargetStatus.STALE;
+		return true;
+	}
+
 	public synchronized boolean isGenerationCurrent(long version, String md5) {
 		return status != RuleTargetStatus.DELETED
 				&& desiredVersion.get() == version

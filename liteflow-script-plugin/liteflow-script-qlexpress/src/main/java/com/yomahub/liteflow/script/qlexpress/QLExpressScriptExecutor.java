@@ -65,12 +65,13 @@ public class QLExpressScriptExecutor extends ScriptExecutor {
 	@Override
 	public Object executeScript(ScriptExecuteWrap wrap) throws Exception {
 		try {
-			if (!compiledScriptMap.containsKey(wrap.getNodeId())) {
+			String scriptNodeId = wrap.getScriptNodeId();
+			if (!compiledScriptMap.containsKey(scriptNodeId)) {
 				String errorMsg = StrUtil.format("script for node[{}] is not loaded", wrap.getNodeId());
 				throw new ScriptLoadException(errorMsg);
 			}
 
-			String script = compiledScriptMap.get(wrap.getNodeId());
+			String script = compiledScriptMap.get(scriptNodeId);
 			Map<String, Object> context = new HashMap<>();
 
 			bindParam(wrap, context::put, context::putIfAbsent);

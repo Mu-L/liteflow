@@ -62,12 +62,13 @@ public class PythonScriptExecutor extends ScriptExecutor {
 
     @Override
     public Object executeScript(ScriptExecuteWrap wrap) throws Exception {
-        if (!compiledScriptMap.containsKey(wrap.getNodeId())) {
+        String scriptNodeId = wrap.getScriptNodeId();
+        if (!compiledScriptMap.containsKey(scriptNodeId)) {
             String errorMsg = StrUtil.format("script for node[{}] is not loaded", wrap.getNodeId());
             throw new ScriptLoadException(errorMsg);
         }
 
-        PyCode compiledScript = compiledScriptMap.get(wrap.getNodeId());
+        PyCode compiledScript = compiledScriptMap.get(scriptNodeId);
 
         bindParam(wrap, pythonInterpreter::set, pythonInterpreter::set);
 

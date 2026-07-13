@@ -33,16 +33,21 @@ public class InMemoryRuleRepository implements RuleRepository {
     public static volatile boolean DOWN = false;
     public static volatile long MIN_SEQ = 0;
     private static volatile Runnable afterNextChainFetch;
+    private static volatile Runnable afterNextScriptFetch;
 
     public static void reset() {
         CHAINS.clear(); SCRIPTS.clear(); CHANGES.clear();
         SEQ.set(0); FETCH_CHAIN_COUNT.set(0); FETCH_CHAIN_META_COUNT.set(0);
         FETCH_SCRIPT_COUNT.set(0); FETCH_SCRIPT_META_COUNT.set(0); FETCH_MANIFEST_COUNT.set(0);
-        DOWN = false; MIN_SEQ = 0; afterNextChainFetch = null;
+        DOWN = false; MIN_SEQ = 0; afterNextChainFetch = null; afterNextScriptFetch = null;
     }
 
     public static void afterNextChainFetch(Runnable callback) {
         afterNextChainFetch = callback;
+    }
+
+    public static void afterNextScriptFetch(Runnable callback) {
+        afterNextScriptFetch = callback;
     }
 
     /** 只放数据不记变更（模拟绕过发布规范的脏写/初始数据） */
@@ -176,7 +181,13 @@ public class InMemoryRuleRepository implements RuleRepository {
     public ScriptRecord fetchScript(String nodeId) {
         FETCH_SCRIPT_COUNT.incrementAndGet();
         checkDown();
-        return SCRIPTS.get(nodeId);
+        ScriptRecord record = SCRIPTS.get(nodeId);
+        Runnable callback = afterNextScriptFetch;
+        afterNextScriptFetch = null;
+        if (callback != null) {
+            callback.run();
+        }
+        return record;
     }
 
     @Override

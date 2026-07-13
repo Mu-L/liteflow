@@ -21,6 +21,7 @@ import com.yomahub.liteflow.property.RuleDbConfig;
 import com.yomahub.liteflow.repository.runtime.ChainCandidateLoader;
 import com.yomahub.liteflow.repository.runtime.RuleTargetState;
 import com.yomahub.liteflow.repository.runtime.RuleTargetStatus;
+import com.yomahub.liteflow.repository.runtime.ScriptCandidateLoader;
 import com.yomahub.liteflow.repository.vo.ChangeRecord;
 import com.yomahub.liteflow.repository.vo.ChainMeta;
 import com.yomahub.liteflow.repository.vo.ChainRecord;
@@ -28,6 +29,7 @@ import com.yomahub.liteflow.repository.vo.RuleManifest;
 import com.yomahub.liteflow.repository.vo.ScriptMeta;
 import com.yomahub.liteflow.repository.vo.ScriptRecord;
 import com.yomahub.liteflow.util.ElRegexUtil;
+import com.yomahub.liteflow.script.ScriptExecutorFactory;
 
 import java.util.ArrayList;
 import java.util.Collections;
@@ -36,6 +38,7 @@ import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
 
@@ -59,6 +62,48 @@ public class RuleDbRuntime {
 	private static final Map<String, Node> SHADOW_SCRIPTS = new ConcurrentHashMap<>();
 	private static final Map<Chain, RuleLoadAttempt> CHAIN_LOAD_STATES = new ConcurrentHashMap<>();
 	private static final Map<Node, RuleLoadAttempt> SCRIPT_LOAD_STATES = new ConcurrentHashMap<>();
+	private static final Map<String, ScriptArtifact> SCRIPT_ARTIFACTS = new ConcurrentHashMap<>();
+
+	private static final class ScriptArtifact {
+
+		private final RuleTargetState state;
+		private final String id;
+		private final String language;
+		private int users;
+		private boolean retired;
+
+		private ScriptArtifact(RuleTargetState state, String id, String language) {
+			this.state = state;
+			this.id = id;
+			this.language = language;
+		}
+	}
+
+	public static final class ScriptExecutionLease implements AutoCloseable {
+
+		private ScriptArtifact artifact;
+
+		private ScriptExecutionLease(ScriptArtifact artifact) {
+			this.artifact = artifact;
+		}
+
+		public String getArtifactId() {
+			return artifact.id;
+		}
+
+		public String getLanguage() {
+			return artifact.language;
+		}
+
+		@Override
+		public void close() {
+			ScriptArtifact current = artifact;
+			if (current != null) {
+				artifact = null;
+				releaseScriptExecution(current);
+			}
+		}
+	}
 
 	private static final class RuleLoadAttempt {
 
@@ -349,6 +394,8 @@ public class RuleDbRuntime {
 		if (state != attempt.state || !isLive(state)
 				|| chain != SHADOW_CHAINS.get(chainId) || FlowBus.getChain(chainId) != chain
 				|| !state.isGenerationCurrent(candidate.getVersion(), candidate.getMd5())
+				|| !scriptGenerationsCurrent(candidate.getChain(),
+						Collections.newSetFromMap(new IdentityHashMap<Executable, Boolean>()))
 				|| !state.markLoaded(candidate.getVersion(), candidate.getMd5())) {
 			throw new ChainLoadException(StrUtil.format("chain[{}] changed or was deleted while loading", chainId));
 		}
@@ -453,6 +500,232 @@ public class RuleDbRuntime {
 			throw new ChainLoadException(StrUtil.format("script node[{}] changed or was deleted while loading", nodeId));
 		}
 		SCRIPT_LOAD_STATES.put(node, new RuleLoadAttempt(state, record.getVersion(), record.getMd5()));
+	}
+
+	public static void refreshScript(Node node) {
+		String nodeId = node.getId();
+		RuleTargetState state = SCRIPT_STATES.get(nodeId);
+		if (state == null) {
+			return;
+		}
+		if (state.isDeleted()) {
+			throw new ChainLoadException(StrUtil.format("script node[{}] was deleted from rule repository", nodeId));
+		}
+
+		Node active = SHADOW_SCRIPTS.get(nodeId);
+		if (state.getStatus() == RuleTargetStatus.READY && state.getActiveVersion() > 0
+				&& active != null && active.isCompiled()) {
+			if (node.getRuleDbScriptVersion() != state.getActiveVersion()) {
+				node.installCompiledScript(active, state.getActiveVersion());
+			}
+			return;
+		}
+
+		boolean hadActive = state.getActiveVersion() > 0 && active != null && active.isCompiled();
+		if (hadActive && !state.getLoadLock().tryLock()) {
+			return;
+		}
+		if (!hadActive) {
+			state.getLoadLock().lock();
+		}
+		try {
+			RuleTargetState current = SCRIPT_STATES.get(nodeId);
+			if (current != state || !isLive(current)) {
+				throw new ChainLoadException(StrUtil.format("script node[{}] changed or was deleted while loading", nodeId));
+			}
+			active = SHADOW_SCRIPTS.get(nodeId);
+			if (state.getStatus() == RuleTargetStatus.READY && state.getActiveVersion() > 0
+					&& active != null && active.isCompiled()) {
+				node.installCompiledScript(active, state.getActiveVersion());
+				return;
+			}
+
+			RuleLoadAttempt attempt = new RuleLoadAttempt(state);
+			state.markLoading();
+			try (ScriptCandidateLoader.Candidate candidate =
+						 new ScriptCandidateLoader(repositoryForRead(), retryTimes())
+								 .load(nodeId, attempt.version, attempt.md5)) {
+				installScriptCandidate(nodeId, node, attempt, candidate);
+			}
+			catch (RuntimeException e) {
+				synchronized (RuleDbRuntime.class) {
+					attempt.markFailedIfCurrent(SCRIPT_STATES.get(nodeId), e);
+				}
+				active = SHADOW_SCRIPTS.get(nodeId);
+				if (hadActive && SCRIPT_STATES.get(nodeId) == state && isLive(state)
+						&& active != null && active.isCompiled()) {
+					node.installCompiledScript(active, state.getActiveVersion());
+					return;
+				}
+				throw e;
+			}
+		}
+		finally {
+			state.getLoadLock().unlock();
+		}
+	}
+
+	private static synchronized void installScriptCandidate(String nodeId, Node requested,
+			RuleLoadAttempt attempt, ScriptCandidateLoader.Candidate candidate) {
+		RuleTargetState state = SCRIPT_STATES.get(nodeId);
+		ScriptRecord record = candidate.getRecord();
+		if (state != attempt.state || !isLive(state)
+				|| !state.isGenerationCurrent(record.getVersion(), record.getMd5())) {
+			throw new ChainLoadException(StrUtil.format("script node[{}] changed or was deleted while loading", nodeId));
+		}
+
+		String activeArtifactId = nodeId + "@ruleDbActive@" + record.getVersion() + "@" + UUID.randomUUID();
+		Node installed = new Node(nodeId, record.getName(), NodeTypeEnum.getEnumByCode(record.getType()),
+				record.getScript(), record.getLanguage());
+		ScriptArtifact retired = null;
+		boolean hadActive = false;
+		try {
+			FlowBus.compileUnpublishedScriptNode(installed, activeArtifactId);
+			installed.installCompiledScript(installed, record.getVersion());
+			synchronized (state) {
+				Node previous = SHADOW_SCRIPTS.get(nodeId);
+				if (state != SCRIPT_STATES.get(nodeId) || !isLive(state) || previous == null
+						|| FlowBus.getNode(nodeId) != previous
+						|| !state.isGenerationCurrent(record.getVersion(), record.getMd5())
+						|| !state.markLoaded(record.getVersion(), record.getMd5())) {
+					throw new ChainLoadException(StrUtil.format("script node[{}] changed or was deleted while loading", nodeId));
+				}
+
+				hadActive = state.getActiveVersion() > 0 && previous.isCompiled();
+				boolean flowReplaced = FlowBus.replaceNode(nodeId, previous, installed);
+				boolean shadowReplaced = flowReplaced && SHADOW_SCRIPTS.replace(nodeId, previous, installed);
+				if (!shadowReplaced || !state.activateLoaded()) {
+					if (shadowReplaced) {
+						SHADOW_SCRIPTS.replace(nodeId, installed, previous);
+					}
+					if (flowReplaced) {
+						FlowBus.replaceNode(nodeId, installed, previous);
+					}
+					throw new ChainLoadException(StrUtil.format("script node[{}] changed or was deleted while activating", nodeId));
+				}
+
+				SCRIPT_ARTIFACTS.put(activeArtifactId,
+						new ScriptArtifact(state, activeArtifactId, record.getLanguage()));
+				requested.installCompiledScript(installed, record.getVersion());
+				if (hadActive) {
+					retired = retireScriptArtifact(state, previous);
+				}
+			}
+			if (hadActive) {
+				markReferencingChainsStale(nodeId);
+			}
+			unloadScriptArtifact(retired);
+		}
+		catch (RuntimeException e) {
+			SCRIPT_ARTIFACTS.remove(activeArtifactId);
+			unloadScriptArtifact(activeArtifactId, record.getLanguage());
+			throw e;
+		}
+	}
+
+	private static ScriptArtifact retireScriptArtifact(RuleTargetState state, Node node) {
+		String artifactId = node.getRuleDbScriptArtifactId();
+		if (StrUtil.isBlank(artifactId)) {
+			return null;
+		}
+		ScriptArtifact artifact = SCRIPT_ARTIFACTS.computeIfAbsent(artifactId,
+				id -> new ScriptArtifact(state, id, node.getLanguage()));
+		artifact.retired = true;
+		if (artifact.users == 0 && SCRIPT_ARTIFACTS.remove(artifact.id, artifact)) {
+			return artifact;
+		}
+		return null;
+	}
+
+	private static void unloadScriptArtifact(ScriptArtifact artifact) {
+		if (artifact != null) {
+			unloadScriptArtifact(artifact.id, artifact.language);
+		}
+	}
+
+	private static void unloadScriptArtifact(String artifactId, String language) {
+		try {
+			ScriptExecutorFactory.loadInstance().getScriptExecutor(language).unLoad(artifactId);
+		}
+		catch (RuntimeException e) {
+			LOG.warn("unload script artifact[{}] failed: {}", artifactId, e.getMessage());
+		}
+	}
+
+	public static ScriptExecutionLease acquireScriptExecution(Node node) {
+		String nodeId = node.getId();
+		while (true) {
+			RuleTargetState state = SCRIPT_STATES.get(nodeId);
+			if (state == null) {
+				return null;
+			}
+			boolean reload = false;
+			synchronized (state) {
+				if (SCRIPT_STATES.get(nodeId) != state || state.isDeleted()) {
+					throw new ChainLoadException(StrUtil.format("script node[{}] was deleted from rule repository", nodeId));
+				}
+				Node active = SHADOW_SCRIPTS.get(nodeId);
+				if (state.getActiveVersion() == 0 || active == null || !active.isCompiled()) {
+					reload = true;
+				}
+				else {
+					if (node.getRuleDbScriptVersion() != state.getActiveVersion()) {
+						node.installCompiledScript(active, state.getActiveVersion());
+					}
+					String artifactId = node.getRuleDbScriptArtifactId();
+					if (StrUtil.isBlank(artifactId)) {
+						throw new ChainLoadException(StrUtil.format("script node[{}] has no active artifact", nodeId));
+					}
+					ScriptArtifact artifact = SCRIPT_ARTIFACTS.computeIfAbsent(artifactId,
+							id -> new ScriptArtifact(state, id, node.getLanguage()));
+					if (artifact.retired) {
+						reload = true;
+					}
+					else {
+						artifact.users++;
+						return new ScriptExecutionLease(artifact);
+					}
+				}
+			}
+			if (reload) {
+				refreshScript(node);
+			}
+		}
+	}
+
+	private static void releaseScriptExecution(ScriptArtifact artifact) {
+		boolean unload = false;
+		synchronized (artifact.state) {
+			if (artifact.users > 0) {
+				artifact.users--;
+			}
+			if (artifact.users == 0 && artifact.retired
+					&& SCRIPT_ARTIFACTS.remove(artifact.id, artifact)) {
+				unload = true;
+			}
+		}
+		if (unload) {
+			unloadScriptArtifact(artifact);
+		}
+	}
+
+	private static void markReferencingChainsStale(String nodeId) {
+		for (Map.Entry<String, Chain> entry : FlowBus.getChainMap().entrySet()) {
+			RuleTargetState chainState = CHAIN_STATES.get(entry.getKey());
+			if (!isLive(chainState) || chainState.getActiveVersion() == 0) {
+				continue;
+			}
+			try {
+				for (Node referenced : LiteflowMetaOperator.getNodes(entry.getKey())) {
+					if (nodeId.equals(referenced.getId())) {
+						chainState.markStale();
+						break;
+					}
+				}
+			}
+			catch (RuntimeException ignored) {
+			}
+		}
 	}
 
 	private static ChainRecord fetchChainWithRetry(String chainId) {
@@ -670,6 +943,10 @@ public class RuleDbRuntime {
 		return isLive(CHAIN_STATES.get(chainId));
 	}
 
+	public static boolean isManagedScript(String nodeId) {
+		return SCRIPT_STATES.get(nodeId) != null;
+	}
+
 	public static boolean isScriptStale(String nodeId) {
 		RuleTargetState state = SCRIPT_STATES.get(nodeId);
 		return state != null && (state.getStatus() == RuleTargetStatus.STALE || state.isDeleted());
@@ -709,9 +986,18 @@ public class RuleDbRuntime {
 
 	static void onScriptEvicted(String nodeId) {
 		RuleTargetState state = SCRIPT_STATES.get(nodeId);
+		ScriptArtifact retired = null;
 		if (state != null) {
-			state.clearActive();
+			synchronized (state) {
+				Node active = SHADOW_SCRIPTS.get(nodeId);
+				if (SCRIPT_STATES.get(nodeId) == state && active != null) {
+					retired = retireScriptArtifact(state, active);
+					active.clearCompiledScript();
+					state.clearActive();
+				}
+			}
 		}
+		unloadScriptArtifact(retired);
 	}
 
 	/** Marks a loaded chain for refresh without discarding its active fields. */
@@ -773,6 +1059,43 @@ public class RuleDbRuntime {
 				}
 			}
 		}
+	}
+
+	private static boolean scriptGenerationsCurrent(Executable executable, Set<Executable> visited) {
+		if (executable == null || !visited.add(executable)) {
+			return true;
+		}
+		if (executable instanceof Node) {
+			Node node = (Node) executable;
+			RuleTargetState scriptState = SCRIPT_STATES.get(node.getId());
+			return !isLive(scriptState) || scriptState.getActiveVersion() == 0
+					|| node.getRuleDbScriptVersion() == scriptState.getActiveVersion();
+		}
+		if (executable instanceof Chain) {
+			List<Condition> conditions = ((Chain) executable).getConditionList();
+			if (CollUtil.isEmpty(conditions)) {
+				return true;
+			}
+			for (Condition condition : conditions) {
+				if (!scriptGenerationsCurrent(condition, visited)) {
+					return false;
+				}
+			}
+			return true;
+		}
+		if (executable instanceof Condition) {
+			for (List<Executable> group : ((Condition) executable).getExecutableGroup().values()) {
+				if (CollUtil.isEmpty(group)) {
+					continue;
+				}
+				for (Executable item : group) {
+					if (!scriptGenerationsCurrent(item, visited)) {
+						return false;
+					}
+				}
+			}
+		}
+		return true;
 	}
 
 	/**
@@ -993,9 +1316,18 @@ public class RuleDbRuntime {
 	private static void removeOwnedScript(String nodeId) {
 		invalidateScriptClones(nodeId);
 		Node owned = SHADOW_SCRIPTS.remove(nodeId);
+		ScriptArtifact retired = null;
 		if (owned != null) {
+			RuleTargetState state = SCRIPT_STATES.get(nodeId);
+			if (state != null) {
+				synchronized (state) {
+					retired = retireScriptArtifact(state, owned);
+					owned.clearCompiledScript();
+				}
+			}
 			FlowBus.removeNode(nodeId, owned);
 		}
+		unloadScriptArtifact(retired);
 	}
 
 	public static synchronized void destroy() {
@@ -1008,6 +1340,11 @@ public class RuleDbRuntime {
 	/** Clears all runtime-owned state after a failed activation or explicit destroy. */
 	private static void clearRuntimeState() {
 		RuleDbCache.destroy();
+		for (ScriptArtifact artifact : new ArrayList<>(SCRIPT_ARTIFACTS.values())) {
+			if (SCRIPT_ARTIFACTS.remove(artifact.id, artifact)) {
+				unloadScriptArtifact(artifact);
+			}
+		}
 		for (Map.Entry<String, Chain> entry : SHADOW_CHAINS.entrySet()) {
 			if (FlowBus.getChain(entry.getKey()) == entry.getValue()) {
 				FlowBus.removeChain(entry.getKey());
@@ -1022,6 +1359,7 @@ public class RuleDbRuntime {
 		SHADOW_SCRIPTS.clear();
 		CHAIN_LOAD_STATES.clear();
 		SCRIPT_LOAD_STATES.clear();
+		SCRIPT_ARTIFACTS.clear();
 		CHAIN_STATES.clear();
 		SCRIPT_STATES.clear();
 		LAST_APPLIED_SEQ.set(0);

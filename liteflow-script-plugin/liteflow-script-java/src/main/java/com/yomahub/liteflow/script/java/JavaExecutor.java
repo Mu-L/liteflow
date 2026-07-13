@@ -45,11 +45,12 @@ public class JavaExecutor extends ScriptExecutor {
 
     @Override
     public Object executeScript(ScriptExecuteWrap wrap) throws Exception {
-        if (!compiledScriptMap.containsKey(wrap.getNodeId())) {
+        String scriptNodeId = wrap.getScriptNodeId();
+        if (!compiledScriptMap.containsKey(scriptNodeId)) {
             String errorMsg = StrUtil.format("script for node[{}] is not loaded", wrap.getNodeId());
             throw new ScriptLoadException(errorMsg);
         }
-        IScriptEvaluator se = compiledScriptMap.get(wrap.getNodeId());
+        IScriptEvaluator se = compiledScriptMap.get(scriptNodeId);
         return se.evaluate(new Object[]{wrap});
     }
 
