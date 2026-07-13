@@ -66,6 +66,31 @@ public class RuleDbSqlTest {
 	}
 
 	@Test
+	public void testChainOnlyUpdateKeepsScriptExecutable() {
+		SqlRulePublisher publisher = new SqlRulePublisher();
+		ScriptRecord s = new ScriptRecord();
+		s.setNodeId("hotS1");
+		s.setType("script");
+		s.setLanguage("groovy");
+		s.setScript("defaultContext.setData(\"hotS1\", true);");
+		publisher.publishScript(s);
+		publisher.publishChain("hotChain", "THEN(a, hotS1)");
+		RuleDbSyncManager.reconcileOnce();
+		Assertions.assertTrue(flowExecutor.execute2Resp("hotChain", "arg").isSuccess());
+
+		// 仅更新 chain（脚本不变），重编后脚本节点必须仍可执行：
+		// 重编时脚本未失效不会走 compileScriptNode 回源，若缓存登记把引用计数瞬时归零
+		// 误卸载执行器里的脚本，这里会报 script for node[hotS1] is not loaded
+		publisher.publishChain("hotChain", "THEN(hotS1, a)");
+		RuleDbSyncManager.pollOnce();
+
+		LiteflowResponse r = flowExecutor.execute2Resp("hotChain", "arg");
+		Assertions.assertTrue(r.isSuccess(), "script node must stay executable after chain-only update, but got: "
+				+ (r.getCause() == null ? "" : r.getCause().getMessage()));
+		Assertions.assertEquals("hotS1==>a", r.getExecuteStepStr());
+	}
+
+	@Test
 	public void testScriptPublishAndExecute() {
 		SqlRulePublisher publisher = new SqlRulePublisher();
 		ScriptRecord s = new ScriptRecord();

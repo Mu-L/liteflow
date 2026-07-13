@@ -48,12 +48,14 @@ public class RuleDbCache {
 		if (chainCache == null) {
 			return;
 		}
-		// 更新引用关系（先释放旧引用，再登记新引用，避免重复计数）
-		releaseRefs(chainId);
-		CHAIN_SCRIPT_REFS.put(chainId, scriptNodeIds);
+		// 更新引用关系：必须先登记新引用再释放旧引用——chain 重编（脚本未变）时新旧列表含同一脚本，
+		// 若先释放，该脚本计数瞬时归零会被 unloadScript 从执行器卸载，而刚编译好的条件树中
+		// 该节点克隆仍是已编译态，不会再回源重编，导致执行时永久报 script not loaded
 		for (String nodeId : scriptNodeIds) {
 			SCRIPT_REF_COUNT.computeIfAbsent(nodeId, k -> new AtomicInteger(0)).incrementAndGet();
 		}
+		releaseRefs(chainId);
+		CHAIN_SCRIPT_REFS.put(chainId, scriptNodeIds);
 		chainCache.put(chainId, Boolean.TRUE);
 	}
 
