@@ -1,6 +1,6 @@
 <p align="center">
 <a href="https://liteflow.cc/">
-    <img src="static/img/logo-main.svg" width="50%" height="auto" alt="logo">
+    <img src="static/img/logo-main.png" width="50%" height="auto" alt="logo">
 </a>
 </p>
 
@@ -50,8 +50,8 @@ LiteFlow is a choreographed rules engine that is best at decoupling your systems
 
 LiteFlow uses regular expressions to drive the engine that you define. Have you ever thought about how to write multithreaded process choreography like the following?
 
-<img src="static/img/flow_e1.svg" style="zoom: 80%">
-<img src="static/img/flow_e2.svg" style="zoom: 80%">
+<img src="static/img/flow_e1.png" width="1071" style="zoom: 80%">
+<img src="static/img/flow_e2.png" width="1051" style="zoom: 80%">
 
 These processes can be easily solved with LiteFlow! The framework has a very low threshold to learn the expression language, but it can accomplish extremely high complexity of the choreography.
 

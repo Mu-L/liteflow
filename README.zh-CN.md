@@ -1,6 +1,6 @@
 <p align="center">
 <a href="https://liteflow.cc/">
-    <img src="static/img/logo-main.svg" width="50%" height="auto" alt="logo">
+    <img src="static/img/logo-main.png" width="50%" height="auto" alt="logo">
 </a>
 </p>
 
@@ -50,8 +50,8 @@ LiteFlow是一款编排式的规则引擎，最擅长去解耦你的系统，如
 
 LiteFlow利用规则表达式为驱动引擎，去驱动你定义的组件。你有想过类似以下的多线程流程编排该如何写吗？
 
-<img src="static/img/flow_e1.svg" style="zoom: 80%">
-<img src="static/img/flow_e2.svg" style="zoom: 80%">
+<img src="static/img/flow_e1.png" width="1071" style="zoom: 80%">
+<img src="static/img/flow_e2.png" width="1051" style="zoom: 80%">
 
 这一切利用LiteFlow轻而易举！框架的表达式语言学习门槛很低，但是却可以完成超高复杂度的编排。
 
