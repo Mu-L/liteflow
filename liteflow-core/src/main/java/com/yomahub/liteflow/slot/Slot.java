@@ -377,21 +377,18 @@ public class Slot {
 	}
 
 	public void addChainInstance(Chain chain){
-		if (!hasMetaData(CHAIN_INSTANCE)) {
-			this.putMetaDataMap(CHAIN_INSTANCE, ListUtil.toList(chain));
-		}else{
-			List<Chain> list = (List<Chain>) metaDataMap.get(CHAIN_INSTANCE);
-			list.add(chain);
-		}
+		// #IDB16L 这里用ConcurrentHashMap来存放chain实例,按chainId为key
+		// 因为在WHEN并行分支中执行子chain时,写操作会和getCurrentChainInstance的读操作并发
+		// 用普通List会在遍历时抛出ConcurrentModificationException
+		Map<String, Chain> chainMap = (Map<String, Chain>) metaDataMap
+				.computeIfAbsent(CHAIN_INSTANCE, k -> new ConcurrentHashMap<String, Chain>());
+		// 同一个chainId只保留最先加入的实例,与原先stream().findFirst()的语义保持一致
+		chainMap.putIfAbsent(chain.getId(), chain);
 	}
 
 	public Chain getCurrentChainInstance(String currentChainId){
-		if (hasMetaData(CHAIN_INSTANCE)) {
-			List<Chain> list = (List<Chain>) metaDataMap.get(CHAIN_INSTANCE);
-			return list.stream().filter(chain -> chain.getId().equals(currentChainId)).findFirst().orElse(null);
-		}else{
-			return null;
-		}
+		Map<String, Chain> chainMap = (Map<String, Chain>) metaDataMap.get(CHAIN_INSTANCE);
+		return chainMap == null ? null : chainMap.get(currentChainId);
 	}
 
 	public void addStep(CmpStep step) {
