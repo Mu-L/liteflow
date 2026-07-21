@@ -23,7 +23,7 @@ public class RedisRuleDbProvider implements RuleDbProvider {
 			applicationName = "default";
 		}
 		RedisConnectionManager connectionManager = new RedisConnectionManager(redis);
-		RedisKeys keys = new RedisKeys(redis.getKeyPrefix(), applicationName);
+		RedisKeys keys = new RedisKeys(redis.getKeyPrefix(), applicationName, redis.getKeyHashTag());
 		this.repository = new RedisRuleRepository(connectionManager, keys);
 		int pollSeconds = config == null || config.getSync() == null
 				|| config.getSync().getPollSeconds() == null ? 3 : config.getSync().getPollSeconds();

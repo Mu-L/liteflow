@@ -12,9 +12,12 @@ import com.yomahub.liteflow.repository.vo.RuleManifest;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /** In-memory provider fixture used by the Rule-DB contract tests. */
 public class InMemoryRuleDbProvider implements RuleDbProvider {
+
+    static final AtomicInteger INSTANCE_COUNT = new AtomicInteger();
 
     private final InMemoryChangeSource changeSource = new InMemoryChangeSource();
     private final RuleChangeSource exposedChangeSource =
@@ -34,6 +37,10 @@ public class InMemoryRuleDbProvider implements RuleDbProvider {
     private volatile Runnable afterManifestSnapshot;
     private int providerCloseCalls;
     private boolean throwOnClose;
+
+    public InMemoryRuleDbProvider() {
+        INSTANCE_COUNT.incrementAndGet();
+    }
 
     @Override
     public String type() {

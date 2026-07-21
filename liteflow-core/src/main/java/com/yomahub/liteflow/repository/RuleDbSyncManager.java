@@ -147,16 +147,18 @@ public class RuleDbSyncManager {
 	 * themselves; this method retains the transitional repository API for tests.
 	 */
 	public static void pollOnce() {
-		RuleChangeSource source = changeSource;
-		if (!(source instanceof ManualPollingChangeSource)) {
-			return;
-		}
+		ManualPollingChangeSource pollingSource;
 		synchronized (CALLBACK_MONITOR) {
 			if (!running) {
 				return;
 			}
-			((ManualPollingChangeSource) source).pollOnce();
+			RuleChangeSource source = changeSource;
+			if (!(source instanceof ManualPollingChangeSource)) {
+				return;
+			}
+			pollingSource = (ManualPollingChangeSource) source;
 		}
+		pollingSource.pollOnce();
 	}
 
 	/** Deterministic full-manifest reconciliation hook. */

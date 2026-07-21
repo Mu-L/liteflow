@@ -42,6 +42,7 @@ public class RuleDbStartupTest extends BaseRuleDbTest {
     public void testEnabledFalseEscapeHatch() {
         InMemoryRuleRepository.putChain("chain1", "THEN(a, b)");
         registerCommonCmp();
+        int providerInstances = InMemoryRuleDbProvider.INSTANCE_COUNT.get();
 
         // 逃生开关：classpath 有实现但 enabled=false → 完全不走 Rule-DB 路径
         RuleDbConfig cfg = new RuleDbConfig();
@@ -50,6 +51,8 @@ public class RuleDbStartupTest extends BaseRuleDbTest {
 
         Assertions.assertEquals(0, InMemoryRuleRepository.FETCH_MANIFEST_COUNT.get(),
                 "disabled rule-db must not touch the repository");
+        Assertions.assertEquals(providerInstances, InMemoryRuleDbProvider.INSTANCE_COUNT.get(),
+                "disabled rule-db must not instantiate its SPI provider");
         Assertions.assertFalse(FlowBus.containChain("chain1"));
         Assertions.assertFalse(executor.execute2Resp("chain1", "arg").isSuccess());
     }

@@ -98,8 +98,12 @@ public class RedisConnectionManager {
 			}
 			applyCredentials(sentinel);
 		}
-		else if (addresses.length > 1) {
-			ClusterServersConfig cluster = config.useClusterServers();
+			else if (addresses.length > 1) {
+				if (StrUtil.isBlank(keyHashTag())) {
+					throw new ConfigErrorException(
+							"rule-db redis key-hash-tag is required for Redis Cluster atomic operations");
+				}
+				ClusterServersConfig cluster = config.useClusterServers();
 			for (String item : addresses) {
 				cluster.addNodeAddress(normalize(item));
 			}
@@ -159,6 +163,10 @@ public class RedisConnectionManager {
 
 	private Integer database() {
 		return publisherConfig == null ? execution().getDatabase() : publisherConfig.getDatabase();
+	}
+
+	private String keyHashTag() {
+		return publisherConfig == null ? execution().getKeyHashTag() : publisherConfig.getKeyHashTag();
 	}
 
 	private RuleDbRedisConfig execution() {

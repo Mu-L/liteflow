@@ -14,6 +14,7 @@ public final class RedisPublisherConfig implements RulePublisherConfig {
 	private final String password;
 	private final Integer database;
 	private final String keyPrefix;
+	private final String keyHashTag;
 	private final RedissonClient redissonClient;
 
 	private RedisPublisherConfig(Builder builder) {
@@ -24,6 +25,7 @@ public final class RedisPublisherConfig implements RulePublisherConfig {
 		this.password = builder.password;
 		this.database = builder.database;
 		this.keyPrefix = builder.keyPrefix;
+		this.keyHashTag = builder.keyHashTag;
 		this.redissonClient = builder.redissonClient;
 	}
 
@@ -65,6 +67,10 @@ public final class RedisPublisherConfig implements RulePublisherConfig {
 		return keyPrefix;
 	}
 
+	public String getKeyHashTag() {
+		return keyHashTag;
+	}
+
 	public RedissonClient getRedissonClient() {
 		return redissonClient;
 	}
@@ -78,6 +84,7 @@ public final class RedisPublisherConfig implements RulePublisherConfig {
 		private String password;
 		private Integer database = 0;
 		private String keyPrefix = "lf";
+		private String keyHashTag;
 		private RedissonClient redissonClient;
 
 		private Builder() {
@@ -115,6 +122,11 @@ public final class RedisPublisherConfig implements RulePublisherConfig {
 
 		public Builder keyPrefix(String keyPrefix) {
 			this.keyPrefix = keyPrefix;
+			return this;
+		}
+
+		public Builder keyHashTag(String keyHashTag) {
+			this.keyHashTag = keyHashTag;
 			return this;
 		}
 

@@ -10,6 +10,8 @@ public final class ZkPublisherConfig implements RulePublisherConfig {
 	private final String connectString;
 	private final Integer sessionTimeout;
 	private final String rootPath;
+	private final String username;
+	private final String password;
 	private final CuratorFramework client;
 
 	private ZkPublisherConfig(Builder builder) {
@@ -17,6 +19,8 @@ public final class ZkPublisherConfig implements RulePublisherConfig {
 		this.connectString = builder.connectString;
 		this.sessionTimeout = builder.sessionTimeout;
 		this.rootPath = builder.rootPath;
+		this.username = builder.username;
+		this.password = builder.password;
 		this.client = builder.client;
 	}
 
@@ -27,6 +31,8 @@ public final class ZkPublisherConfig implements RulePublisherConfig {
 	public String getConnectString() { return connectString; }
 	public Integer getSessionTimeout() { return sessionTimeout; }
 	public String getRootPath() { return rootPath; }
+	public String getUsername() { return username; }
+	public String getPassword() { return password; }
 	public CuratorFramework getClient() { return client; }
 
 	public static final class Builder {
@@ -34,12 +40,16 @@ public final class ZkPublisherConfig implements RulePublisherConfig {
 		private String connectString;
 		private Integer sessionTimeout = 60000;
 		private String rootPath = "/liteflow";
+		private String username;
+		private String password;
 		private CuratorFramework client;
 		private Builder() { }
 		public Builder applicationName(String value) { this.applicationName = value; return this; }
 		public Builder connectString(String value) { this.connectString = value; return this; }
 		public Builder sessionTimeout(Integer value) { this.sessionTimeout = value; return this; }
 		public Builder rootPath(String value) { this.rootPath = value; return this; }
+		public Builder username(String value) { this.username = value; return this; }
+		public Builder password(String value) { this.password = value; return this; }
 		public Builder client(CuratorFramework value) { this.client = value; return this; }
 		public ZkPublisherConfig build() { return new ZkPublisherConfig(this); }
 	}

@@ -12,7 +12,7 @@ final class FakeEtcdWatchFacade implements EtcdWatchFacade {
 	public synchronized Handle watch(String prefix, long startRevision, Listener listener) {
 		Registration registration = new Registration(prefix, startRevision, listener);
 		registrations.add(registration);
-		return () -> registration.closed = true;
+		return () -> close(registration);
 	}
 
 	synchronized void emitPut(String key, String value, long revision) {
@@ -27,9 +27,13 @@ final class FakeEtcdWatchFacade implements EtcdWatchFacade {
 		for (Registration registration : new ArrayList<>(registrations)) {
 			if (!registration.closed) {
 				registration.listener.onError(error);
-				}
 			}
 		}
+	}
+
+	synchronized void completeActive() {
+		failActive(null);
+	}
 
 		synchronized List<Long> startRevisions() {
 		List<Long> result = new ArrayList<>();
@@ -45,6 +49,13 @@ final class FakeEtcdWatchFacade implements EtcdWatchFacade {
 					&& (registration.startRevision == 0 || event.revision() >= registration.startRevision)) {
 				registration.listener.onEvents(Collections.singletonList(event));
 			}
+		}
+	}
+
+	private synchronized void close(Registration registration) {
+		if (!registration.closed) {
+			registration.closed = true;
+			registration.listener.onError(null);
 		}
 	}
 

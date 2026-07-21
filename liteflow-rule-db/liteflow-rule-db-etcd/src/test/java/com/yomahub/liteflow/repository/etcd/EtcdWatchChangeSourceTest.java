@@ -81,6 +81,33 @@ class EtcdWatchChangeSourceTest {
 		assertTrue(watch.startRevisions().contains(31L));
 	}
 
+	@Test
+	void completedWatchRetriesAndDeliversFromTheCursor() {
+		List<ChangeRecord> changes = new ArrayList<>();
+		source.open(changes::addAll);
+		source.activate(20);
+
+		watch.completeActive();
+		assertEquals(ChangeSourceHealth.Status.DEGRADED, source.health().getStatus());
+		await(() -> watch.startRevisions().contains(21L));
+
+		watch.emitPut(keys.chainMeta("c1"), chainMeta(1), 21);
+		await(() -> changes.size() == 1);
+		assertEquals(ChangeSourceHealth.Status.UP, source.health().getStatus());
+		assertEquals(21, changes.get(0).getSeq());
+	}
+
+	@Test
+	void reconciliationIgnoresCompletionFromClosingOldWatches() {
+		source.open(changes -> { });
+		source.activate(20);
+
+		source.onReconciled(30);
+
+		assertEquals(ChangeSourceHealth.Status.UP, source.health().getStatus());
+		assertTrue(watch.startRevisions().contains(31L));
+	}
+
 	private String chainMeta(long version) {
 		ChainRecord record = new ChainRecord();
 		record.setVersion(version);

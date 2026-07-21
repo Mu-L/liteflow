@@ -60,7 +60,8 @@ final class JetcdWatchFacade implements EtcdWatchFacade {
 			option.withRevision(startRevision);
 		}
 		Watch.Watcher watcher = watch.watch(key, option.build(), Watch.listener(
-				response -> listener.onEvents(events(response)), listener::onError));
+				response -> listener.onEvents(events(response)), listener::onError,
+				() -> listener.onError(null)));
 		return watcher::close;
 	}
 

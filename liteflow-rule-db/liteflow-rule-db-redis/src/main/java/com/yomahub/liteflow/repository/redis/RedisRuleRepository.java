@@ -44,7 +44,7 @@ public class RedisRuleRepository implements RuleRepository {
 				? new RuleDbRedisConfig() : config.getRedis();
 		String applicationName = config == null ? null : config.getApplicationName();
 		this.connectionManager = new RedisConnectionManager(redis);
-		this.keys = new RedisKeys(redis.getKeyPrefix(), applicationName);
+		this.keys = new RedisKeys(redis.getKeyPrefix(), applicationName, redis.getKeyHashTag());
 	}
 
 	RedisRuleRepository(RedisConnectionManager connectionManager, RedisKeys keys) {

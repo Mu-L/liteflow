@@ -9,6 +9,7 @@ public class RuleDbRedisConfig {
 	private String password;
 	private Integer database = 0;
 	private String keyPrefix = "lf";
+	private String keyHashTag;
 	private String redissonBeanName;
 
 	public String getAddress() {
@@ -57,6 +58,14 @@ public class RuleDbRedisConfig {
 
 	public void setKeyPrefix(String keyPrefix) {
 		this.keyPrefix = keyPrefix;
+	}
+
+	public String getKeyHashTag() {
+		return keyHashTag;
+	}
+
+	public void setKeyHashTag(String keyHashTag) {
+		this.keyHashTag = keyHashTag;
 	}
 
 	public String getRedissonBeanName() {

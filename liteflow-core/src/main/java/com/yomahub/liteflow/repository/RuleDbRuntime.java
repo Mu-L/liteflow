@@ -151,20 +151,23 @@ public class RuleDbRuntime {
 		if (cached != null) {
 			return cached;
 		}
+		LiteflowConfig config = LiteflowConfigGetter.get();
+		RuleDbConfig ruleDb = config.getRuleDb();
+		if (ruleDb != null && Boolean.FALSE.equals(ruleDb.getEnabled())) {
+			activeFlag = Boolean.FALSE;
+			return false;
+		}
 		if (!RuleDbProviderHolder.hasImplementation()) {
 			activeFlag = Boolean.FALSE;
 			return false;
 		}
-		LiteflowConfig config = LiteflowConfigGetter.get();
-		RuleDbConfig ruleDb = config.getRuleDb();
 		// 未显式配置 ruleDb 但 classpath 有实现，也视为激活（零配置理念）
-		boolean result = ruleDb == null || ruleDb.getEnabled() == null || Boolean.TRUE.equals(ruleDb.getEnabled());
-		activeFlag = result;
-		return result;
+		activeFlag = Boolean.TRUE;
+		return true;
 	}
 
 	public static synchronized void init() {
-		if (initialized) {
+		if (initialized || !isActive()) {
 			return;
 		}
 		RuleDbProvider provider = RuleDbProviderHolder.get();

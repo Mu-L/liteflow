@@ -28,7 +28,7 @@ final class RedisRulePublisherImpl implements RulePublisher {
 
 	RedisRulePublisherImpl(RedisPublisherConfig config) {
 		this.connectionManager = new RedisConnectionManager(config);
-		this.keys = new RedisKeys(config.getKeyPrefix(), config.applicationName());
+		this.keys = new RedisKeys(config.getKeyPrefix(), config.applicationName(), config.getKeyHashTag());
 	}
 
 	@Override

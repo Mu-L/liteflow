@@ -105,6 +105,7 @@ final class EtcdWatchChangeSource implements RuleChangeSource {
 			recovering = false;
 			retryAttempt = 0;
 			health = health.successful(cursor);
+			generation++;
 			closeHandlesLocked();
 			openWatchesLocked(baselineSeq + 1);
 		}
@@ -284,7 +285,9 @@ final class EtcdWatchChangeSource implements RuleChangeSource {
 	}
 
 	private void closeHandlesLocked() {
-		for (EtcdWatchFacade.Handle handle : handles) {
+		List<EtcdWatchFacade.Handle> closing = new ArrayList<>(handles);
+		handles.clear();
+		for (EtcdWatchFacade.Handle handle : closing) {
 			try {
 				handle.close();
 			}
@@ -292,7 +295,6 @@ final class EtcdWatchChangeSource implements RuleChangeSource {
 				// Best effort; generation checks make late callbacks harmless.
 			}
 		}
-		handles.clear();
 	}
 
 	private static ThreadFactory daemon(String name) {
