@@ -13,6 +13,10 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
 
+import java.sql.Connection;
+import java.sql.DriverManager;
+import java.sql.Statement;
+
 /**
  * 缺表且未开 auto-init-table：报错必须是 ConfigErrorException 且信息内含完整可复制执行的 DDL（spec §9），
  * 而不是让后续查询抛一个裸 SQLException 让用户自己猜。
@@ -46,6 +50,51 @@ public class SqlMissingTableTest {
 				"error message should contain copy-pastable DDL, but was: " + e.getMessage());
 		Assertions.assertTrue(e.getMessage().contains("lf_chain"));
 		Assertions.assertTrue(e.getMessage().contains("lf_change_log"));
+	}
+
+	@Test
+	public void testExistingTableWithMissingColumnFailsSchemaValidationAfterAutoInit() throws Exception {
+		String url = "jdbc:h2:mem:lfOldSchema;DB_CLOSE_DELAY=-1";
+		try (Connection connection = DriverManager.getConnection(url, "sa", "");
+				Statement statement = connection.createStatement()) {
+			statement.execute("CREATE TABLE lf_chain (application_name VARCHAR(64), chain_id VARCHAR(128))");
+		}
+
+		LiteflowConfig config = new LiteflowConfig();
+		RuleDbConfig ruleDb = new RuleDbConfig();
+		ruleDb.getSql().setUrl(url);
+		ruleDb.getSql().setUsername("sa");
+		ruleDb.getSql().setAutoInitTable(true);
+		config.setRuleDb(ruleDb);
+		LiteflowConfigGetter.setLiteflowConfig(config);
+
+		ConfigErrorException error = Assertions.assertThrows(ConfigErrorException.class,
+				() -> new SqlRuleRepository().fetchManifest());
+		Assertions.assertTrue(error.getMessage().contains("missing or incompatible"));
+		Assertions.assertTrue(error.getMessage().contains("lf_chain"));
+	}
+
+	@Test
+	public void testUndersizedColumnFailsSchemaValidation() throws Exception {
+		String url = "jdbc:h2:mem:lfUndersizedSchema;DB_CLOSE_DELAY=-1";
+		LiteflowConfig config = new LiteflowConfig();
+		RuleDbConfig ruleDb = new RuleDbConfig();
+		ruleDb.getSql().setUrl(url);
+		ruleDb.getSql().setUsername("sa");
+		ruleDb.getSql().setAutoInitTable(true);
+		config.setRuleDb(ruleDb);
+		LiteflowConfigGetter.setLiteflowConfig(config);
+		new SqlRuleRepository().fetchManifest();
+
+		try (Connection connection = DriverManager.getConnection(url, "sa", "");
+				Statement statement = connection.createStatement()) {
+			statement.execute("ALTER TABLE lf_chain ALTER COLUMN application_name VARCHAR(32)");
+		}
+		ruleDb.getSql().setAutoInitTable(false);
+
+		ConfigErrorException error = Assertions.assertThrows(ConfigErrorException.class,
+				() -> new SqlRuleRepository().fetchManifest());
+		Assertions.assertTrue(error.getMessage().contains("capacity 32 is below required 64"));
 	}
 
 }

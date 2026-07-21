@@ -1,6 +1,7 @@
 package com.yomahub.liteflow.repository.sql;
 
 import cn.hutool.core.util.StrUtil;
+import com.yomahub.liteflow.exception.ConfigErrorException;
 import com.yomahub.liteflow.publisher.PublisherBackend;
 import com.yomahub.liteflow.publisher.RulePublisher;
 import com.yomahub.liteflow.publisher.RulePublisherConfig;
@@ -24,8 +25,12 @@ public class SqlRulePublisherProvider implements RulePublisherProvider {
 		if (sql.getDataSource() == null && StrUtil.isBlank(sql.getUrl())) {
 			throw new PublisherConfigurationException("SQL publisher requires a DataSource or JDBC url");
 		}
-		if (StrUtil.isNotBlank(sql.getTablePrefix()) && !sql.getTablePrefix().matches("[A-Za-z0-9_]+")) {
-			throw new PublisherConfigurationException("SQL publisher tablePrefix contains invalid characters");
+		try {
+			SqlStorageValidator.validateApplicationName(sql.applicationName());
+			SqlStorageValidator.validateTablePrefix(sql.getTablePrefix());
+		}
+		catch (ConfigErrorException e) {
+			throw new PublisherConfigurationException(e.getMessage(), e);
 		}
 		return new SqlRulePublisherImpl(sql);
 	}

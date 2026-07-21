@@ -5,13 +5,13 @@
 package com.yomahub.liteflow.test.ruledb.sql;
 
 import cn.hutool.crypto.SecureUtil;
-import com.yomahub.liteflow.exception.SeqGapException;
 import com.yomahub.liteflow.publisher.PublishChainRequest;
 import com.yomahub.liteflow.publisher.PublishScriptRequest;
 import com.yomahub.liteflow.publisher.RemoveRuleRequest;
 import com.yomahub.liteflow.publisher.RulePublisher;
 import com.yomahub.liteflow.publisher.RulePublisherFactory;
 import com.yomahub.liteflow.repository.sql.SqlPublisherConfig;
+import com.yomahub.liteflow.repository.sql.SqlRulePublisher;
 import com.yomahub.liteflow.repository.sql.SqlRuleRepository;
 import com.yomahub.liteflow.repository.vo.ChainMeta;
 import com.yomahub.liteflow.repository.vo.ChainRecord;
@@ -26,6 +26,7 @@ import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.PreparedStatement;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
@@ -150,29 +151,42 @@ public class SqlRepositoryProtocolTest {
 	}
 
 	@Test
-	public void testChangeLogCleanupTriggersSeqGap() throws Exception {
-		// 保证 since > 0（断档检测只在非冷启动位点生效）
-		publishChain("protoGapChain", "THEN(a, b)");
-		long s0 = repository.fetchLatestSeq();
-		publishChain("protoGapChain", "THEN(a, b)");
-		long s1 = repository.fetchLatestSeq();
-		publishChain("protoGapChain", "THEN(a, b)");
+	public void testApplicationScopedSequenceAllowsGlobalGaps() {
+		long before = repository.fetchLatestSeq();
+		try (RulePublisher other = RulePublisherFactory.create(SqlPublisherConfig.builder()
+				.applicationName("ruledb-sql-other")
+				.url(H2_URL)
+				.username("sa")
+				.password("")
+				.build())) {
+			other.publishChain(PublishChainRequest.builder()
+					.chainId("otherAppChain").el("THEN(a)").build());
+		}
+		publishChain("afterGlobalGap", "THEN(b)");
 
-		// 运维清理旧 change_log：删除 seq <= s1 的记录，制造断档
-		try (Connection c = DriverManager.getConnection(H2_URL, "sa", "");
-				PreparedStatement ps = c.prepareStatement(
-						"DELETE FROM lf_change_log WHERE application_name = ? AND seq <= ?")) {
-			ps.setString(1, "ruledb-sql-it");
-			ps.setLong(2, s1);
-			ps.executeUpdate();
+		List<ChangeRecord> changes = repository.fetchChangesSince(before);
+		Assertions.assertEquals(1, changes.size());
+		Assertions.assertEquals("afterGlobalGap", changes.get(0).getTargetId());
+	}
+
+	@Test
+	public void testChangeLogReadsAreBoundedByBatchSize() {
+		long before = repository.fetchLatestSeq();
+		for (int i = 0; i < 5; i++) {
+			publishChain("batchChain" + i, "THEN(a)");
 		}
 
-		Assertions.assertThrows(SeqGapException.class, () -> repository.fetchChangesSince(s0));
+		List<ChangeRecord> first = repository.fetchChangesSince(before, 2);
+		Assertions.assertEquals(2, first.size());
+		List<ChangeRecord> second = repository.fetchChangesSince(first.get(1).getSeq(), 2);
+		Assertions.assertEquals(2, second.size());
+		List<ChangeRecord> third = repository.fetchChangesSince(second.get(1).getSeq(), 2);
+		Assertions.assertEquals(1, third.size());
 	}
 
 	@Test
 	public void testConcurrentRepublishKeepsVersionAtomic() throws Exception {
-		// 首发单独完成（并发首发同一 id 是文档化的 best-effort，不在此测）；并发重发布走行锁自增
+		// 首发单独完成；并发重发布走行锁自增。
 		publishChain("protoCcChain", "THEN(a, b)");
 		long before = repository.fetchLatestSeq();
 
@@ -204,6 +218,63 @@ public class SqlRepositoryProtocolTest {
 				repository.fetchChain("protoCcChain").getVersion());
 		Assertions.assertEquals(threads * publishesPerThread,
 				repository.fetchChangesSince(before).size());
+	}
+
+	@Test
+	public void testConcurrentFirstPublishRetriesUniqueKeyRace() throws Exception {
+		String chainId = "protoConcurrentCreate" + System.nanoTime();
+		long before = repository.fetchLatestSeq();
+		int threads = 4;
+		ExecutorService pool = Executors.newFixedThreadPool(threads);
+		CountDownLatch start = new CountDownLatch(1);
+		List<Throwable> failures = Collections.synchronizedList(new ArrayList<>());
+		for (int i = 0; i < threads; i++) {
+			final int component = i;
+			pool.submit(() -> {
+				try {
+					start.await();
+					publishChain(chainId, component % 2 == 0 ? "THEN(a)" : "THEN(b)");
+				}
+				catch (Throwable e) {
+					failures.add(e);
+				}
+			});
+		}
+		start.countDown();
+		pool.shutdown();
+		Assertions.assertTrue(pool.awaitTermination(30, TimeUnit.SECONDS));
+		Assertions.assertTrue(failures.isEmpty(), "all concurrent creates must succeed: " + failures);
+		Assertions.assertEquals(threads, repository.fetchChain(chainId).getVersion());
+		Assertions.assertEquals(threads, repository.fetchChangesSince(before).size());
+	}
+
+	@Test
+	public void testLegacyPublisherConcurrentFirstPublishRetriesUniqueKeyRace() throws Exception {
+		String chainId = "legacyConcurrentCreate" + System.nanoTime();
+		long before = repository.fetchLatestSeq();
+		int threads = 4;
+		SqlRulePublisher legacyPublisher = new SqlRulePublisher();
+		ExecutorService pool = Executors.newFixedThreadPool(threads);
+		CountDownLatch start = new CountDownLatch(1);
+		List<Throwable> failures = Collections.synchronizedList(new ArrayList<>());
+		for (int i = 0; i < threads; i++) {
+			final int component = i;
+			pool.submit(() -> {
+				try {
+					start.await();
+					legacyPublisher.publishChain(chainId, component % 2 == 0 ? "THEN(a)" : "THEN(b)");
+				}
+				catch (Throwable e) {
+					failures.add(e);
+				}
+			});
+		}
+		start.countDown();
+		pool.shutdown();
+		Assertions.assertTrue(pool.awaitTermination(30, TimeUnit.SECONDS));
+		Assertions.assertTrue(failures.isEmpty(), "legacy concurrent creates must succeed: " + failures);
+		Assertions.assertEquals(threads, repository.fetchChain(chainId).getVersion());
+		Assertions.assertEquals(threads, repository.fetchChangesSince(before).size());
 	}
 
 	private long publishChain(String chainId, String el) {

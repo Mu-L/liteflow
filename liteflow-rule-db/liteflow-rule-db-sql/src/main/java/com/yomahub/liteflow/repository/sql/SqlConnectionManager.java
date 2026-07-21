@@ -65,7 +65,11 @@ public class SqlConnectionManager {
 				return dataSource;
 			}
 			if (publisherConfig == null && StrUtil.isBlank(url())) {
-				dataSource = lookupDataSourceBean(execution().getDatasourceBeanName());
+				DataSource candidate = lookupDataSourceBean(execution().getDatasourceBeanName());
+				if (candidate == null) {
+					return null;
+				}
+				dataSource = candidate;
 			}
 			resolved = true;
 			return dataSource;
@@ -134,8 +138,8 @@ public class SqlConnectionManager {
 		if (jdbcUrl.startsWith("jdbc:h2")) {
 			return "org.h2.Driver";
 		}
-		if (jdbcUrl.startsWith("jdbc:postgresql")) {
-			return "org.postgresql.Driver";
+		if (jdbcUrl.startsWith("jdbc:mariadb")) {
+			return "org.mariadb.jdbc.Driver";
 		}
 		return null;
 	}

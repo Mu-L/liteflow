@@ -9,6 +9,7 @@ import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.sql.Savepoint;
 
 /**
  * SQL 发布 API：单事务内 UPSERT 内容行（version+1、重算 md5）+ INSERT change_log。
@@ -25,10 +26,11 @@ public class SqlRulePublisher {
 
 	private String app() {
 		RuleDbConfig cfg = LiteflowConfigGetter.get().getRuleDb();
-		return cfg == null || cfg.getApplicationName() == null ? "default" : cfg.getApplicationName();
+		return SqlStorageValidator.applicationNameOrDefault(cfg == null ? null : cfg.getApplicationName());
 	}
 
 	public long publishChain(String chainId, String el) {
+		SqlStorageValidator.validateLegacyChain(chainId, el);
 		String md5 = SecureUtil.md5(el);
 		try (Connection c = connectionManager.getConnection()) {
 			c.setAutoCommit(false);
@@ -47,6 +49,7 @@ public class SqlRulePublisher {
 	}
 
 	public long publishScript(ScriptRecord s) {
+		SqlStorageValidator.validateLegacyScript(s);
 		String md5 = SecureUtil.md5(s.getScript());
 		try (Connection c = connectionManager.getConnection()) {
 			c.setAutoCommit(false);
@@ -65,6 +68,7 @@ public class SqlRulePublisher {
 	}
 
 	public void removeChain(String chainId) {
+		SqlStorageValidator.validateTargetId("chainId", chainId);
 		try (Connection c = connectionManager.getConnection()) {
 			c.setAutoCommit(false);
 			try {
@@ -87,6 +91,7 @@ public class SqlRulePublisher {
 	}
 
 	public void removeScript(String nodeId) {
+		SqlStorageValidator.validateTargetId("nodeId", nodeId);
 		try (Connection c = connectionManager.getConnection()) {
 			c.setAutoCommit(false);
 			try {
@@ -147,15 +152,21 @@ public class SqlRulePublisher {
 			updated = ps.executeUpdate();
 		}
 		if (updated == 0) {
-			try (PreparedStatement ps = c.prepareStatement("INSERT INTO " + dialect.chainTable()
-					+ " (application_name, chain_id, el_data, content_md5, version, enable) VALUES (?, ?, ?, ?, 1, 1)")) {
-				ps.setString(1, app());
-				ps.setString(2, chainId);
-				ps.setString(3, el);
-				ps.setString(4, md5);
-				ps.executeUpdate();
+			Savepoint beforeInsert = c.setSavepoint();
+			try {
+				insertChain(c, chainId, el, md5);
+				return 1;
 			}
-			return 1;
+			catch (SQLException e) {
+				if (!isConstraintViolation(e)) {
+					throw e;
+				}
+				c.rollback(beforeInsert);
+				if (updateChain(c, chainId, el, md5) != 1) {
+					throw e;
+				}
+				return currentChainVersion(c, chainId);
+			}
 		}
 		// UPDATE 已原子自增，同事务内 SELECT 取回新版本供 change_log 使用
 		return currentChainVersion(c, chainId);
@@ -179,20 +190,79 @@ public class SqlRulePublisher {
 			updated = ps.executeUpdate();
 		}
 		if (updated == 0) {
-			try (PreparedStatement ps = c.prepareStatement("INSERT INTO " + dialect.scriptTable()
-					+ " (application_name, node_id, script_data, script_name, script_type, script_language, content_md5, version, enable) VALUES (?, ?, ?, ?, ?, ?, ?, 1, 1)")) {
-				ps.setString(1, app());
-				ps.setString(2, s.getNodeId());
-				ps.setString(3, s.getScript());
-				ps.setString(4, s.getName());
-				ps.setString(5, s.getType());
-				ps.setString(6, s.getLanguage());
-				ps.setString(7, md5);
-				ps.executeUpdate();
+			Savepoint beforeInsert = c.setSavepoint();
+			try {
+				insertScript(c, s, md5);
+				return 1;
 			}
-			return 1;
+			catch (SQLException e) {
+				if (!isConstraintViolation(e)) {
+					throw e;
+				}
+				c.rollback(beforeInsert);
+				if (updateScript(c, s, md5) != 1) {
+					throw e;
+				}
+				return currentScriptVersion(c, s.getNodeId());
+			}
 		}
 		return currentScriptVersion(c, s.getNodeId());
+	}
+
+	private int updateChain(Connection c, String chainId, String el, String md5) throws SQLException {
+		try (PreparedStatement ps = c.prepareStatement("UPDATE " + dialect.chainTable()
+				+ " SET el_data = ?, content_md5 = ?, version = version + 1, enable = 1, gmt_modified = CURRENT_TIMESTAMP"
+				+ " WHERE application_name = ? AND chain_id = ?")) {
+			ps.setString(1, el);
+			ps.setString(2, md5);
+			ps.setString(3, app());
+			ps.setString(4, chainId);
+			return ps.executeUpdate();
+		}
+	}
+
+	private void insertChain(Connection c, String chainId, String el, String md5) throws SQLException {
+		try (PreparedStatement ps = c.prepareStatement("INSERT INTO " + dialect.chainTable()
+				+ " (application_name, chain_id, el_data, content_md5, version, enable) VALUES (?, ?, ?, ?, 1, 1)")) {
+			ps.setString(1, app());
+			ps.setString(2, chainId);
+			ps.setString(3, el);
+			ps.setString(4, md5);
+			ps.executeUpdate();
+		}
+	}
+
+	private int updateScript(Connection c, ScriptRecord s, String md5) throws SQLException {
+		try (PreparedStatement ps = c.prepareStatement("UPDATE " + dialect.scriptTable()
+				+ " SET script_data = ?, script_name = ?, script_type = ?, script_language = ?, content_md5 = ?, version = version + 1, enable = 1, gmt_modified = CURRENT_TIMESTAMP"
+				+ " WHERE application_name = ? AND node_id = ?")) {
+			ps.setString(1, s.getScript());
+			ps.setString(2, s.getName());
+			ps.setString(3, s.getType());
+			ps.setString(4, s.getLanguage());
+			ps.setString(5, md5);
+			ps.setString(6, app());
+			ps.setString(7, s.getNodeId());
+			return ps.executeUpdate();
+		}
+	}
+
+	private void insertScript(Connection c, ScriptRecord s, String md5) throws SQLException {
+		try (PreparedStatement ps = c.prepareStatement("INSERT INTO " + dialect.scriptTable()
+				+ " (application_name, node_id, script_data, script_name, script_type, script_language, content_md5, version, enable) VALUES (?, ?, ?, ?, ?, ?, ?, 1, 1)")) {
+			ps.setString(1, app());
+			ps.setString(2, s.getNodeId());
+			ps.setString(3, s.getScript());
+			ps.setString(4, s.getName());
+			ps.setString(5, s.getType());
+			ps.setString(6, s.getLanguage());
+			ps.setString(7, md5);
+			ps.executeUpdate();
+		}
+	}
+
+	private boolean isConstraintViolation(SQLException e) {
+		return e.getSQLState() != null && e.getSQLState().startsWith("23");
 	}
 
 	private void insertChangeLog(Connection c, String targetType, String targetId, String op, long version)

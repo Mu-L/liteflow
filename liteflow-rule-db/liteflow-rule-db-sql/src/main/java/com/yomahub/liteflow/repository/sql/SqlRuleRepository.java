@@ -1,7 +1,7 @@
 package com.yomahub.liteflow.repository.sql;
 
 import cn.hutool.core.util.StrUtil;
-import com.yomahub.liteflow.exception.SeqGapException;
+import com.yomahub.liteflow.exception.ConfigErrorException;
 import com.yomahub.liteflow.property.LiteflowConfigGetter;
 import com.yomahub.liteflow.property.RuleDbConfig;
 import com.yomahub.liteflow.repository.RuleRepository;
@@ -46,7 +46,7 @@ public class SqlRuleRepository implements RuleRepository {
 			String applicationName, boolean autoInitTable) {
 		this.connectionManager = connectionManager;
 		this.dialect = dialect;
-		this.applicationName = StrUtil.isBlank(applicationName) ? "default" : applicationName;
+		this.applicationName = SqlStorageValidator.applicationNameOrDefault(applicationName);
 		this.autoInitTable = autoInitTable;
 		this.dynamicExecutionConfig = false;
 	}
@@ -57,7 +57,7 @@ public class SqlRuleRepository implements RuleRepository {
 		}
 		RuleDbConfig config = LiteflowConfigGetter.get().getRuleDb();
 		String name = config == null ? null : config.getApplicationName();
-		return StrUtil.isBlank(name) ? "default" : name;
+		return SqlStorageValidator.applicationNameOrDefault(name);
 	}
 
 	private Connection conn() throws SQLException {
@@ -85,10 +85,9 @@ public class SqlRuleRepository implements RuleRepository {
 			} catch (SQLException e) {
 				throw new RuntimeException("auto init rule-db tables failed: " + e.getMessage(), e);
 			}
-		} else {
-			// 未开自动建表：显式探测三张表，缺表时报错并附完整 DDL，而非让后续查询抛裸 SQLException
-			dialect.checkTablesExist(c);
 		}
+		// CREATE TABLE IF NOT EXISTS 不会修复已有的旧表，因此无论是否自动建表都必须校验完整列集合。
+		dialect.checkTablesExist(c);
 		tableChecked = true;
 	}
 
@@ -146,6 +145,7 @@ public class SqlRuleRepository implements RuleRepository {
 
 	@Override
 	public ChainRecord fetchChain(String chainId) {
+		SqlStorageValidator.validateTargetId("chainId", chainId);
 		String sql = "SELECT chain_id, el_data, route_data, namespace, version, content_md5, enable FROM "
 				+ dialect.chainTable() + " WHERE application_name = ? AND chain_id = ?";
 		try (Connection c = conn(); PreparedStatement ps = c.prepareStatement(sql)) {
@@ -172,6 +172,7 @@ public class SqlRuleRepository implements RuleRepository {
 
 	@Override
 	public ChainMeta fetchChainMeta(String chainId) {
+		SqlStorageValidator.validateTargetId("chainId", chainId);
 		String sql = "SELECT chain_id, version, content_md5 FROM " + dialect.chainTable()
 				+ " WHERE application_name = ? AND chain_id = ? AND enable = 1";
 		try (Connection c = conn(); PreparedStatement ps = c.prepareStatement(sql)) {
@@ -191,6 +192,7 @@ public class SqlRuleRepository implements RuleRepository {
 
 	@Override
 	public ScriptRecord fetchScript(String nodeId) {
+		SqlStorageValidator.validateTargetId("nodeId", nodeId);
 		String sql = "SELECT node_id, script_data, script_name, script_type, script_language, version, content_md5, enable FROM "
 				+ dialect.scriptTable() + " WHERE application_name = ? AND node_id = ?";
 		try (Connection c = conn(); PreparedStatement ps = c.prepareStatement(sql)) {
@@ -218,6 +220,7 @@ public class SqlRuleRepository implements RuleRepository {
 
 	@Override
 	public ScriptMeta fetchScriptMeta(String nodeId) {
+		SqlStorageValidator.validateTargetId("nodeId", nodeId);
 		String sql = "SELECT node_id, version, content_md5, script_type, script_language, script_name FROM "
 				+ dialect.scriptTable() + " WHERE application_name = ? AND node_id = ? AND enable = 1";
 		try (Connection c = conn(); PreparedStatement ps = c.prepareStatement(sql)) {
@@ -252,55 +255,43 @@ public class SqlRuleRepository implements RuleRepository {
 	}
 
 	public List<ChangeRecord> fetchChangesSince(long seq) {
-		// 断档检测：若存在记录但最小 seq 已大于 seq+1，说明中间被清理
-		String minSql = "SELECT MIN(seq) FROM " + dialect.changeLogTable() + " WHERE application_name = ?";
+		return fetchChangesSince(seq, 1000);
+	}
+
+	public List<ChangeRecord> fetchChangesSince(long seq, int limit) {
+		if (limit <= 0) {
+			throw new ConfigErrorException("rule-db sql change-log batch size must be positive");
+		}
 		String listSql = "SELECT seq, target_type, target_id, op, version FROM " + dialect.changeLogTable()
-				+ " WHERE application_name = ? AND seq > ? ORDER BY seq ASC";
+				+ " WHERE application_name = ? AND seq > ? ORDER BY seq ASC LIMIT ?";
 		try (Connection c = conn()) {
-			try (PreparedStatement ps = c.prepareStatement(minSql)) {
-				ps.setString(1, app());
-				try (ResultSet rs = ps.executeQuery()) {
-					if (rs.next()) {
-						long min = rs.getLong(1);
-						if (!rs.wasNull() && seq > 0 && min > seq + 1) {
-							throw new SeqGapException("change log gap: since=" + seq + " min=" + min);
-						}
-					}
-				}
-			}
 			List<ChangeRecord> result = new ArrayList<>();
 			try (PreparedStatement ps = c.prepareStatement(listSql)) {
 				ps.setString(1, app());
 				ps.setLong(2, seq);
+				ps.setInt(3, limit);
 				try (ResultSet rs = ps.executeQuery()) {
-					while (rs.next()) {
-						result.add(new ChangeRecord(rs.getLong(1),
-								ChangeRecord.TargetType.valueOf(rs.getString(2)),
-								rs.getString(3), ChangeRecord.Op.valueOf(rs.getString(4)), rs.getLong(5)));
-					}
+						while (rs.next()) {
+							long changeSeq = rs.getLong(1);
+							String targetType = rs.getString(2);
+							String targetId = rs.getString(3);
+							String operation = rs.getString(4);
+							try {
+								SqlStorageValidator.validateTargetId("change-log target_id", targetId);
+								result.add(new ChangeRecord(changeSeq,
+										ChangeRecord.TargetType.valueOf(targetType),
+										targetId, ChangeRecord.Op.valueOf(operation), rs.getLong(5)));
+							}
+							catch (RuntimeException e) {
+								throw new SqlChangeLogCorruptionException("rule-db sql change-log row[" + changeSeq
+										+ "] has invalid target_type[" + targetType + "] or op[" + operation + "]", e);
+							}
+						}
 				}
 			}
-			validateSeqContinuity(result, seq);
 			return result;
 		} catch (SQLException e) {
 			throw wrap("fetchChangesSince", e);
-		}
-	}
-
-	private static void validateSeqContinuity(List<ChangeRecord> changes, long currentSeq) {
-		long expected = currentSeq + 1;
-		long previous = Long.MIN_VALUE;
-		for (ChangeRecord change : changes) {
-			long value = change.getSeq();
-			if (value <= currentSeq || value == previous) {
-				continue;
-			}
-			if (value != expected) {
-				throw new SeqGapException("change log internal gap: since=" + currentSeq
-						+ " expected=" + expected + " actual=" + value);
-			}
-			previous = value;
-			expected = value + 1;
 		}
 	}
 

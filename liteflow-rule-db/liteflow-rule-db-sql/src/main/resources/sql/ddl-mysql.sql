@@ -10,7 +10,7 @@ CREATE TABLE IF NOT EXISTS `${prefix}chain` (
   `gmt_create` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   `gmt_modified` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY (`application_name`, `chain_id`)
-);
+) DEFAULT CHARACTER SET utf8mb4;
 CREATE TABLE IF NOT EXISTS `${prefix}script` (
   `application_name` VARCHAR(64) NOT NULL,
   `node_id` VARCHAR(128) NOT NULL,
@@ -24,7 +24,7 @@ CREATE TABLE IF NOT EXISTS `${prefix}script` (
   `gmt_create` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   `gmt_modified` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY (`application_name`, `node_id`)
-);
+) DEFAULT CHARACTER SET utf8mb4;
 CREATE TABLE IF NOT EXISTS `${prefix}change_log` (
   `seq` BIGINT NOT NULL AUTO_INCREMENT,
   `application_name` VARCHAR(64) NOT NULL,
@@ -35,4 +35,4 @@ CREATE TABLE IF NOT EXISTS `${prefix}change_log` (
   `gmt_create` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY (`seq`),
   KEY `idx_app_seq` (`application_name`, `seq`)
-);
+) DEFAULT CHARACTER SET utf8mb4;

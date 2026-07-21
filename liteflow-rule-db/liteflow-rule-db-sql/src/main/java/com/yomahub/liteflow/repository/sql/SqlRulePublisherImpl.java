@@ -14,6 +14,7 @@ import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.sql.Savepoint;
 import java.sql.Statement;
 
 /** SQL transaction implementation of the backend-neutral publisher API. */
@@ -31,6 +32,7 @@ final class SqlRulePublisherImpl implements RulePublisher {
 
 	@Override
 	public PublishResult publishChain(PublishChainRequest request) {
+		SqlStorageValidator.validateChainRequest(request);
 		return inTransaction("publish chain", connection -> {
 			long version = upsertChain(connection, request);
 			long sequence = insertChangeLog(connection, ChangeRecord.TargetType.CHAIN,
@@ -42,6 +44,7 @@ final class SqlRulePublisherImpl implements RulePublisher {
 
 	@Override
 	public PublishResult publishScript(PublishScriptRequest request) {
+		SqlStorageValidator.validateScriptRequest(request);
 		return inTransaction("publish script", connection -> {
 			long version = upsertScript(connection, request);
 			long sequence = insertChangeLog(connection, ChangeRecord.TargetType.SCRIPT,
@@ -53,11 +56,13 @@ final class SqlRulePublisherImpl implements RulePublisher {
 
 	@Override
 	public PublishResult removeChain(RemoveRuleRequest request) {
+		SqlStorageValidator.validateRemoveRequest(request);
 		return remove(request, ChangeRecord.TargetType.CHAIN, dialect.chainTable(), "chain_id");
 	}
 
 	@Override
 	public PublishResult removeScript(RemoveRuleRequest request) {
+		SqlStorageValidator.validateRemoveRequest(request);
 		return remove(request, ChangeRecord.TargetType.SCRIPT, dialect.scriptTable(), "node_id");
 	}
 
@@ -82,6 +87,34 @@ final class SqlRulePublisherImpl implements RulePublisher {
 			}
 		}
 
+		int updated = updateChain(connection, request, expected);
+		if (updated == 0) {
+			long current = currentVersion(connection, dialect.chainTable(), "chain_id", request.getChainId());
+			if (expected != null) {
+				throw conflict("chain", request.getChainId(), expected, current);
+			}
+			Savepoint beforeInsert = connection.setSavepoint();
+			try {
+				insertChain(connection, request);
+				return 1;
+			}
+			catch (SQLException e) {
+				if (!isConstraintViolation(e)) {
+					throw e;
+				}
+				connection.rollback(beforeInsert);
+				if (updateChain(connection, request, null) != 1) {
+					throw e;
+				}
+				return currentVersion(connection, dialect.chainTable(), "chain_id", request.getChainId());
+			}
+		}
+		return expected == null
+				? currentVersion(connection, dialect.chainTable(), "chain_id", request.getChainId())
+				: expected + 1;
+	}
+
+	private int updateChain(Connection connection, PublishChainRequest request, Long expected) throws SQLException {
 		StringBuilder sql = new StringBuilder("UPDATE ").append(dialect.chainTable())
 				.append(" SET el_data = ?, route_data = ?, namespace = ?, content_md5 = ?, ")
 				.append("version = version + 1, enable = 1, gmt_modified = CURRENT_TIMESTAMP")
@@ -89,7 +122,6 @@ final class SqlRulePublisherImpl implements RulePublisher {
 		if (expected != null) {
 			sql.append(" AND version = ?");
 		}
-		int updated;
 		try (PreparedStatement statement = connection.prepareStatement(sql.toString())) {
 			statement.setString(1, request.getEl());
 			statement.setString(2, request.getRoute());
@@ -100,19 +132,8 @@ final class SqlRulePublisherImpl implements RulePublisher {
 			if (expected != null) {
 				statement.setLong(7, expected);
 			}
-			updated = statement.executeUpdate();
+			return statement.executeUpdate();
 		}
-		if (updated == 0) {
-			long current = currentVersion(connection, dialect.chainTable(), "chain_id", request.getChainId());
-			if (expected != null) {
-				throw conflict("chain", request.getChainId(), expected, current);
-			}
-			insertChain(connection, request);
-			return 1;
-		}
-		return expected == null
-				? currentVersion(connection, dialect.chainTable(), "chain_id", request.getChainId())
-				: expected + 1;
 	}
 
 	private void insertChain(Connection connection, PublishChainRequest request) throws SQLException {
@@ -146,6 +167,35 @@ final class SqlRulePublisherImpl implements RulePublisher {
 			}
 		}
 
+		int updated = updateScript(connection, request, expected);
+		if (updated == 0) {
+			long current = currentVersion(connection, dialect.scriptTable(), "node_id", request.getNodeId());
+			if (expected != null) {
+				throw conflict("script", request.getNodeId(), expected, current);
+			}
+			Savepoint beforeInsert = connection.setSavepoint();
+			try {
+				insertScript(connection, request);
+				return 1;
+			}
+			catch (SQLException e) {
+				if (!isConstraintViolation(e)) {
+					throw e;
+				}
+				connection.rollback(beforeInsert);
+				if (updateScript(connection, request, null) != 1) {
+					throw e;
+				}
+				return currentVersion(connection, dialect.scriptTable(), "node_id", request.getNodeId());
+			}
+		}
+		return expected == null
+				? currentVersion(connection, dialect.scriptTable(), "node_id", request.getNodeId())
+				: expected + 1;
+	}
+
+	private int updateScript(Connection connection, PublishScriptRequest request, Long expected)
+			throws SQLException {
 		StringBuilder sql = new StringBuilder("UPDATE ").append(dialect.scriptTable())
 				.append(" SET script_data = ?, script_name = ?, script_type = ?, script_language = ?, ")
 				.append("content_md5 = ?, version = version + 1, enable = 1, gmt_modified = CURRENT_TIMESTAMP")
@@ -153,7 +203,6 @@ final class SqlRulePublisherImpl implements RulePublisher {
 		if (expected != null) {
 			sql.append(" AND version = ?");
 		}
-		int updated;
 		try (PreparedStatement statement = connection.prepareStatement(sql.toString())) {
 			statement.setString(1, request.getScript());
 			statement.setString(2, request.getName());
@@ -165,19 +214,8 @@ final class SqlRulePublisherImpl implements RulePublisher {
 			if (expected != null) {
 				statement.setLong(8, expected);
 			}
-			updated = statement.executeUpdate();
+			return statement.executeUpdate();
 		}
-		if (updated == 0) {
-			long current = currentVersion(connection, dialect.scriptTable(), "node_id", request.getNodeId());
-			if (expected != null) {
-				throw conflict("script", request.getNodeId(), expected, current);
-			}
-			insertScript(connection, request);
-			return 1;
-		}
-		return expected == null
-				? currentVersion(connection, dialect.scriptTable(), "node_id", request.getNodeId())
-				: expected + 1;
 	}
 
 	private void insertScript(Connection connection, PublishScriptRequest request) throws SQLException {

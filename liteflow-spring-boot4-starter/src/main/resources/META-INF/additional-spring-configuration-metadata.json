@@ -606,6 +606,13 @@
       "defaultValue": false
     },
     {
+      "name": "liteflow.rule-db.sql.change-log-batch-size",
+      "type": "java.lang.Integer",
+      "description": "Maximum SQL change-log rows loaded in one polling batch.",
+      "sourceType": "com.yomahub.liteflow.property.RuleDbSqlConfig",
+      "defaultValue": 1000
+    },
+    {
       "name": "liteflow.rule-db.redis.address",
       "type": "java.lang.String",
       "description": "Redis address(es), comma-separated for cluster or sentinel.",

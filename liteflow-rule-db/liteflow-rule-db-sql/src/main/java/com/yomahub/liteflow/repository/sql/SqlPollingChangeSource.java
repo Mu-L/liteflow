@@ -1,7 +1,6 @@
 package com.yomahub.liteflow.repository.sql;
 
 import com.yomahub.liteflow.exception.ConfigErrorException;
-import com.yomahub.liteflow.exception.SeqGapException;
 import com.yomahub.liteflow.log.LFLog;
 import com.yomahub.liteflow.log.LFLoggerManager;
 import com.yomahub.liteflow.repository.ChangeSourceHealth;
@@ -25,6 +24,7 @@ public class SqlPollingChangeSource implements RuleChangeSource, ManualPollingCh
 	private final Object pollMonitor = new Object();
 	private final SqlRuleRepository repository;
 	private final int pollSeconds;
+	private final int batchSize;
 
 	private RuleChangeListener listener;
 	private ScheduledExecutorService scheduler;
@@ -34,14 +34,29 @@ public class SqlPollingChangeSource implements RuleChangeSource, ManualPollingCh
 	private boolean closed;
 
 	public SqlPollingChangeSource(SqlRuleRepository repository, int pollSeconds) {
+		this(repository, pollSeconds, 1000);
+	}
+
+	public SqlPollingChangeSource(SqlRuleRepository repository, int pollSeconds, int batchSize) {
 		if (repository == null) {
 			throw new ConfigErrorException("rule-db sql repository must not be null");
 		}
 		if (pollSeconds <= 0) {
 			throw new ConfigErrorException("liteflow.rule-db.sync.poll-seconds must be positive");
 		}
+		if (batchSize <= 0) {
+			throw new ConfigErrorException("liteflow.rule-db.sql.change-log-batch-size must be positive");
+		}
 		this.repository = repository;
 		this.pollSeconds = pollSeconds;
+		this.batchSize = batchSize;
+	}
+
+	@Override
+	public boolean requiresContinuousSequence() {
+		// seq is global AUTO_INCREMENT while application_name scopes each consumer.
+		// Interleaved writes from other applications therefore create legitimate gaps.
+		return false;
 	}
 
 	@Override
@@ -89,32 +104,42 @@ public class SqlPollingChangeSource implements RuleChangeSource, ManualPollingCh
 			baseline = cursor;
 		}
 		try {
-			if (repository.fetchLatestSeq() <= baseline) {
+			long highWatermark = repository.fetchLatestSeq();
+			if (highWatermark <= baseline) {
 				markSuccessful();
 				return;
 			}
-			List<ChangeRecord> changes = repository.fetchChangesSince(baseline);
-			if (changes.isEmpty()) {
-				markSuccessful();
-				return;
-			}
-			if (isClosed()) {
-				return;
-			}
-			activeListener.onChanges(changes);
-			long deliveredCursor = baseline;
-			for (ChangeRecord change : changes) {
-				deliveredCursor = Math.max(deliveredCursor, change.getSeq());
-			}
-			synchronized (monitor) {
-				if (!closed) {
-					cursor = Math.max(cursor, deliveredCursor);
-					health = health.successful(cursor);
+			while (baseline < highWatermark) {
+				List<ChangeRecord> changes = repository.fetchChangesSince(baseline, batchSize);
+				if (changes.isEmpty()) {
+					markDegraded("rule-db sql change-log advanced but no rows were readable");
+					if (!isClosed()) {
+						activeListener.onReconcileRequired();
+					}
+					return;
+				}
+				if (isClosed()) {
+					return;
+				}
+				activeListener.onChanges(changes);
+				long deliveredCursor = baseline;
+				for (ChangeRecord change : changes) {
+					deliveredCursor = Math.max(deliveredCursor, change.getSeq());
+				}
+				if (deliveredCursor <= baseline) {
+					throw new IllegalStateException("rule-db sql change-log cursor did not advance");
+				}
+				baseline = deliveredCursor;
+				synchronized (monitor) {
+					if (!closed) {
+						cursor = Math.max(cursor, deliveredCursor);
+						health = health.successful(cursor);
+					}
 				}
 			}
 		}
-		catch (SeqGapException gap) {
-			markDegraded(gap.getMessage());
+		catch (SqlChangeLogCorruptionException e) {
+			markDegraded(e.getMessage());
 			if (!isClosed()) {
 				activeListener.onReconcileRequired();
 			}

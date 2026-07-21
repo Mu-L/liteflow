@@ -364,10 +364,13 @@ etcd 用 **KV revision** 作变更序号，watch 按 revision 区间订阅。etc
 | `liteflow.rule-db.sql.password` | — | 配合 `url` 使用。 |
 | `liteflow.rule-db.sql.driver-class-name` | 从 `url` 自动推断 | 留空即可。 |
 | `liteflow.rule-db.sql.datasource-bean-name` | 自动查找 | 多 `DataSource` 场景下，用它指定复用哪个 bean。 |
-| `liteflow.rule-db.sql.table-prefix` | `lf_` | 表名前缀，可改；字段名固定不可配。 |
+| `liteflow.rule-db.sql.table-prefix` | `lf_` | 表名前缀，可改；只允许 ASCII 字母、数字、下划线，最长 54 个字符，字段名固定不可配。 |
 | `liteflow.rule-db.sql.auto-init-table` | `false` | 设 `true` 则启动时 `CREATE TABLE IF NOT EXISTS`。 |
+| `liteflow.rule-db.sql.change-log-batch-size` | `1000` | 每次轮询最多读取的变更日志条数。积压会按批次连续排空，避免一次把全部历史记录载入内存。必须大于 0。 |
 
 > **生产建议用容器 DataSource（连接池）。** 走 `url` 直连时，框架用 `DriverManager` 裸连接，每次回源都建连、无池化——仅适合开发/测试。生产环境配好 HikariCP 等连接池的 `DataSource` bean，让插件复用（姿势 A）。
+
+> SQL 插件当前发布支持矩阵为 **MySQL / MariaDB**；H2 仅用于自动化测试。`auto-init-table` 会根据数据库产品选择 MySQL/MariaDB 或 H2 DDL，不会再把未知数据库误判成 H2。MySQL/MariaDB DDL 显式使用 `utf8mb4`；手工建表也必须保持该字符集，才能与 Publisher 的 UTF-8 字节边界校验一致。PostgreSQL、Oracle、SQL Server 等数据库尚未通过兼容矩阵，不在本版本支持范围内。
 
 ### Redis 专属配置（`liteflow-rule-db-redis`）
 
@@ -769,7 +772,7 @@ GET /actuator/liteflow/ruledb
 | **运行期存储不可用，缓存命中** | 照常执行，完全不受影响。**这是核心可用性属性**——存储挂了不影响已缓存链路跑。（隐含前提：故障期间没有针对该 chain 的变更被应用；一旦变更把缓存态失效，就落入下一行「未命中」的语义。） |
 | **运行期存储不可用，缓存未命中** | fetch 按 `fetch-retry-times`（默认 3）重试，仍失败抛 `ChainLoadException`（区别于 `ChainNotFoundException`——前者是「规则存在但取不回来」，后者是「规则不存在」）。存储恢复后下次执行自动回源，无需干预。 |
 | **变更通道故障**（轮询报错 / watch 断线） | 标记 `DEGRADED` 并重试。SQL/Redis 轮询失败会在下个周期重试；zk 连接断开由 Curator 自动重连，重连后自动补订阅并触发全量对账；etcd watch 失败（含 revision compacted）按指数退避重试，仍失败则触发全量对账。断线窗口内丢失的变更由周期对账（≤`reconcile-seconds`）兜底补齐。 |
-| **change_log / changelog 被清理导致序号断档**（SQL/Redis） | `fetchChangesSince` 抛 `SeqGapException` → 自动触发全量对账。 |
+| **change_log / changelog 被清理或损坏** | SQL 的 `seq` 是全表自增序号，不同 `application_name` 之间出现跳号是正常现象；当应用水位已前进却读不到对应行，或日志中的 `target_type` / `op` 无法解析时，SQL 会标记 `DEGRADED` 并立即请求全量对账。Redis 仍按连续应用级序号检测断档。 |
 | **fetch 到 enable=false 或行/节点不存在** | 本次执行抛 `ChainLoadException`；下个对账周期该条目从索引移除，之后执行报 chain 不存在（`ChainNotFoundException` 语义）。 |
 | **变更已感知但回源新版失败** | v1 是惰性失效（见 [§10.4](#104-v1-实现注记惰性失效)）：变更到达即失效缓存态，之后每次执行都重试回源，成功前该 chain 执行失败（`ChainLoadException`）。**发布动作本身有小概率把可用的旧版换成暂不可用**——请避开存储抖动窗口发布。 |
 | **SQL 缺表且未开 `auto-init-table`** | 首次访问存储时报 `ConfigErrorException`，错误信息内含完整可复制执行的 DDL。 |
@@ -798,6 +801,6 @@ GET /actuator/liteflow/ruledb
    - 节点实例 ID 持久化（旧 sql 插件的 `NodeInstanceIdManageSpi` 能力）。
    - 管理 UI / 控制台。v1 只提供 Publisher API 与写入规范。
 
-6. **并发首发同一个 id，用 `expectedVersion=0` 才能安全并发。** 不传 `expectedVersion` 时，已有行的并发更新在行锁/Lua/事务下原子自增，安全；但「两个 publish 几乎同时到达、都是 INSERT 新行」的竞态，第二个会被主键冲突拒绝（得到一个存储异常）。如果业务上确实需要多端并发首发同一个新 id，传 `expectedVersion(0)`——它会以明确的 `VersionConflictException` 拒绝重复插入，让你能区分「冲突重试」而非拿到模糊的存储异常。常规做法仍是「单运营/单管理后台」写入。
+6. **并发发布语义。** 不传 `expectedVersion` 时是无条件 UPSERT：已有行通过数据库行锁原子递增版本；多个发布者同时首发同一个 id 时，唯一键竞态会在事务保存点后自动转为更新，所有成功发布各自产生一个连续版本和一条 change log。传 `expectedVersion=0` 表示“仅当不存在时创建”，重复创建会明确抛 `VersionConflictException`；传正数表示按版本做 CAS 更新。
 
 7. **手动 build 的 chain 可以与本模式共存，但 id 不要与存储中的 chain 撞车。** 通过 `LiteFlowChainELBuilder` 手动 build、且 id **不在**存储清单中的 chain 不受 Rule-DB 干预（对账只管理来源于清单的条目，不会把手写 chain 当成「存储中不存在」而删掉）。但如果手动 build 的 id 与存储中的 chain **相同**，懒加载/失效路径会用存储内容**覆盖**手动 build 的版本——撞车时以存储为准。请保证两边 id 集合不相交。

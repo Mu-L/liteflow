@@ -10,6 +10,7 @@ public class RuleDbSqlConfig {
 	private String datasourceBeanName;
 	private String tablePrefix = "lf_";
 	private Boolean autoInitTable = Boolean.FALSE;
+	private Integer changeLogBatchSize = 1000;
 
 	public String getUrl() {
 		return url;
@@ -65,5 +66,13 @@ public class RuleDbSqlConfig {
 
 	public void setAutoInitTable(Boolean autoInitTable) {
 		this.autoInitTable = autoInitTable;
+	}
+
+	public Integer getChangeLogBatchSize() {
+		return changeLogBatchSize;
+	}
+
+	public void setChangeLogBatchSize(Integer changeLogBatchSize) {
+		this.changeLogBatchSize = changeLogBatchSize;
 	}
 }
