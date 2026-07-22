@@ -127,6 +127,14 @@ public class FlowExecutor {
 				throw new ConfigErrorException("rule-source and rule-db mode cannot be used together, please remove one of them");
 			}
 			com.yomahub.liteflow.repository.RuleDbRuntime.init();
+			// 与非 rule-db 路径保持一致：启动阶段需执行初始化钩子（如 javax-pro 的 loadSecondPhase 批量编译），
+			// 并把 startUpPhase 复位为 false。否则 startUpPhase 会一直停留在 true，导致 rule-db 在运行期
+			// 懒加载脚本时 JavaxProExecutor.load 走启动期缓冲分支（只入 codeSpecMap，不入 compiledScriptMap），
+			// loadSecondPhase 又不会在运行期触发，最终 execute 报 "script for node[x] is not loaded"。
+			if (isStart) {
+				FlowInitHook.executeHook();
+			}
+			startUpPhase.compareAndSet(true, false);
 			return;
 		}
 

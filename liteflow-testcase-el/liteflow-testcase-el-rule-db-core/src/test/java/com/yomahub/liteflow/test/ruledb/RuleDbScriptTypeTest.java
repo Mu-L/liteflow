@@ -42,7 +42,8 @@ public class RuleDbScriptTypeTest extends BaseRuleDbTest {
 
 	@Test
 	public void testScriptWithoutLanguageUsesDefault() {
-		// spec §6.1：script_language 为空用全局默认（classpath 上只有 groovy 一种引擎）
+		// spec §6.1：script_language 为空时用 SPI 首个执行器作为全局默认
+		// （本模块 pom 中 groovy 声明在 javax-pro 之前，故默认引擎仍是 groovy）
 		InMemoryRuleRepository.putScript("sd1", "defaultContext.setData(\"sd1\", true);", "script", null);
 		InMemoryRuleRepository.putChain("chainDefaultLang", "THEN(a, sd1)");
 		registerCommonCmp();

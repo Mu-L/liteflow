@@ -22,6 +22,13 @@
             <version>${revision}</version>
             <scope>test</scope>
         </dependency>
+        <!-- 用于 rule-db + javax-pro 的启动相位回归测试；声明在 groovy 之后，保证默认引擎仍是 groovy -->
+        <dependency>
+            <groupId>com.yomahub</groupId>
+            <artifactId>liteflow-script-javax-pro</artifactId>
+            <version>${revision}</version>
+            <scope>test</scope>
+        </dependency>
         <dependency>
             <groupId>ch.qos.logback</groupId>
             <artifactId>logback-classic</artifactId>
