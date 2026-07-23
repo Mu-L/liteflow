@@ -17,6 +17,10 @@ class RuleDbConfigTest {
 		Assertions.assertNull(config.getSync().getPollSeconds());
 		Assertions.assertEquals("lf_", config.getSql().getTablePrefix());
 		Assertions.assertFalse(config.getSql().getAutoInitTable());
+		Assertions.assertEquals("lf_", config.getPostgresql().getTablePrefix());
+		Assertions.assertFalse(config.getPostgresql().getAutoInitTable());
+		Assertions.assertEquals("liteflow", config.getMongodb().getDatabase());
+		Assertions.assertEquals("lf_", config.getMongodb().getCollectionPrefix());
 		Assertions.assertEquals(0, config.getRedis().getDatabase());
 		Assertions.assertEquals("lf", config.getRedis().getKeyPrefix());
 		Assertions.assertEquals("/liteflow", config.getEtcd().getRootPath());

@@ -13,6 +13,8 @@
     <modules>
         <module>liteflow-rule-db-publisher</module>
         <module>liteflow-rule-db-sql</module>
+        <module>liteflow-rule-db-postgresql</module>
+        <module>liteflow-rule-db-mongodb</module>
         <module>liteflow-rule-db-redis</module>
         <module>liteflow-rule-db-etcd</module>
         <module>liteflow-rule-db-zk</module>

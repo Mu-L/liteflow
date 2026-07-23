@@ -46,8 +46,13 @@
         <module>liteflow-testcase-el-sql-springboot-sharding-jdbc</module>
         <module>liteflow-testcase-el-script-javaxpro-springboot</module>
         <module>liteflow-testcase-el-rule-db-core</module>
+        <module>liteflow-testcase-el-rule-db-publisher</module>
         <module>liteflow-testcase-el-rule-db-sql-springboot</module>
+        <module>liteflow-testcase-el-rule-db-postgresql-springboot</module>
+        <module>liteflow-testcase-el-rule-db-mongodb-springboot</module>
         <module>liteflow-testcase-el-rule-db-redis-springboot</module>
+        <module>liteflow-testcase-el-rule-db-etcd-springboot</module>
+        <module>liteflow-testcase-el-rule-db-zk-springboot</module>
     </modules>
 
     <profiles>

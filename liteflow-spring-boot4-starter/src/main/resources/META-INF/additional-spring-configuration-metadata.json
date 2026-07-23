@@ -544,13 +544,13 @@
     {
       "name": "liteflow.rule-db.sync.poll-seconds",
       "type": "java.lang.Integer",
-      "description": "Polling interval in seconds for SQL and Redis incremental changes. Null means use the backend default.",
+      "description": "Polling interval in seconds for SQL, PostgreSQL, MongoDB, and Redis incremental changes. Null means use the backend default.",
       "sourceType": "com.yomahub.liteflow.property.RuleDbSyncConfig"
     },
     {
       "name": "liteflow.rule-db.sync.reconcile-seconds",
       "type": "java.lang.Integer",
-      "description": "Manifest reconciliation interval in seconds for all Rule-DB backends. SQL and Redis also poll change logs; etcd and ZooKeeper also watch metadata.",
+      "description": "Manifest reconciliation interval in seconds for all Rule-DB backends. SQL, PostgreSQL, MongoDB, and Redis also poll change logs; etcd and ZooKeeper also watch metadata.",
       "sourceType": "com.yomahub.liteflow.property.RuleDbSyncConfig",
       "defaultValue": 60
     },
@@ -610,6 +610,90 @@
       "type": "java.lang.Integer",
       "description": "Maximum SQL change-log rows loaded in one polling batch.",
       "sourceType": "com.yomahub.liteflow.property.RuleDbSqlConfig",
+      "defaultValue": 1000
+    },
+    {
+      "name": "liteflow.rule-db.postgresql.url",
+      "type": "java.lang.String",
+      "description": "PostgreSQL JDBC url.",
+      "sourceType": "com.yomahub.liteflow.property.RuleDbPostgresqlConfig"
+    },
+    {
+      "name": "liteflow.rule-db.postgresql.username",
+      "type": "java.lang.String",
+      "description": "PostgreSQL username.",
+      "sourceType": "com.yomahub.liteflow.property.RuleDbPostgresqlConfig"
+    },
+    {
+      "name": "liteflow.rule-db.postgresql.password",
+      "type": "java.lang.String",
+      "description": "PostgreSQL password.",
+      "sourceType": "com.yomahub.liteflow.property.RuleDbPostgresqlConfig"
+    },
+    {
+      "name": "liteflow.rule-db.postgresql.driver-class-name",
+      "type": "java.lang.String",
+      "description": "PostgreSQL driver class name. Blank means org.postgresql.Driver.",
+      "sourceType": "com.yomahub.liteflow.property.RuleDbPostgresqlConfig"
+    },
+    {
+      "name": "liteflow.rule-db.postgresql.datasource-bean-name",
+      "type": "java.lang.String",
+      "description": "PostgreSQL DataSource bean name. Blank means auto-discovery by type.",
+      "sourceType": "com.yomahub.liteflow.property.RuleDbPostgresqlConfig"
+    },
+    {
+      "name": "liteflow.rule-db.postgresql.table-prefix",
+      "type": "java.lang.String",
+      "description": "PostgreSQL table prefix. Only ASCII letters, digits, and underscores are allowed, up to 52 characters.",
+      "sourceType": "com.yomahub.liteflow.property.RuleDbPostgresqlConfig",
+      "defaultValue": "lf_"
+    },
+    {
+      "name": "liteflow.rule-db.postgresql.auto-init-table",
+      "type": "java.lang.Boolean",
+      "description": "Whether to auto-initialize PostgreSQL tables on startup.",
+      "sourceType": "com.yomahub.liteflow.property.RuleDbPostgresqlConfig",
+      "defaultValue": false
+    },
+    {
+      "name": "liteflow.rule-db.postgresql.change-log-batch-size",
+      "type": "java.lang.Integer",
+      "description": "Maximum PostgreSQL change-log rows loaded in one polling batch.",
+      "sourceType": "com.yomahub.liteflow.property.RuleDbPostgresqlConfig",
+      "defaultValue": 1000
+    },
+    {
+      "name": "liteflow.rule-db.mongodb.uri",
+      "type": "java.lang.String",
+      "description": "MongoDB connection URI for a replica set or sharded cluster. Blank means lookup a MongoClient bean.",
+      "sourceType": "com.yomahub.liteflow.property.RuleDbMongoConfig"
+    },
+    {
+      "name": "liteflow.rule-db.mongodb.database",
+      "type": "java.lang.String",
+      "description": "MongoDB database name.",
+      "sourceType": "com.yomahub.liteflow.property.RuleDbMongoConfig",
+      "defaultValue": "liteflow"
+    },
+    {
+      "name": "liteflow.rule-db.mongodb.collection-prefix",
+      "type": "java.lang.String",
+      "description": "MongoDB collection prefix.",
+      "sourceType": "com.yomahub.liteflow.property.RuleDbMongoConfig",
+      "defaultValue": "lf_"
+    },
+    {
+      "name": "liteflow.rule-db.mongodb.mongo-client-bean-name",
+      "type": "java.lang.String",
+      "description": "MongoClient bean name. Blank means auto-discovery by type.",
+      "sourceType": "com.yomahub.liteflow.property.RuleDbMongoConfig"
+    },
+    {
+      "name": "liteflow.rule-db.mongodb.change-log-batch-size",
+      "type": "java.lang.Integer",
+      "description": "Maximum MongoDB change-log documents loaded in one polling batch.",
+      "sourceType": "com.yomahub.liteflow.property.RuleDbMongoConfig",
       "defaultValue": 1000
     },
     {

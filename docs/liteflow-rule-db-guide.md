@@ -1,19 +1,19 @@
 # LiteFlow Rule-DB 模式使用指南
 
-LiteFlow 的 Rule-DB 模式让规则和脚本**真正以 SQL 数据库 / Redis / ZooKeeper / etcd 为权威源**，JVM 只保留轻量索引 + 有界缓存。它解决了原有 6 个规则插件「启动拼一份大 XML、规则全量常驻堆内存、多节点各跑各的没有一致性保证」的本质痛点：多节点能在秒级窗口内收敛到同一版本，且 JVM 内存占用与规则总量解耦。
+LiteFlow 的 Rule-DB 模式让规则和脚本**真正以 SQL 数据库 / PostgreSQL / MongoDB / Redis / ZooKeeper / etcd 为权威源**，JVM 只保留轻量索引 + 有界缓存。它解决了原有 6 个规则插件「启动拼一份大 XML、规则全量常驻堆内存、多节点各跑各的没有一致性保证」的本质痛点：多节点能在秒级窗口内收敛到同一版本，且 JVM 内存占用与规则总量解耦。
 
 本文分两部分：
 
-- **上手篇**：从「它和老的规则插件有什么不同」讲起，带你用 SQL / Redis / ZooKeeper / etcd 四条路各跑通第一条 Rule-DB 规则。先看这部分。
+- **上手篇**：从「它和老的规则插件有什么不同」讲起，带你用六种后端跑通第一条 Rule-DB 规则。先看这部分。
 - **参考篇**：每个配置项、表结构/键结构/路径结构、发布协议、一致性模型、降级语义、可观测性、限制清单，需要查细节时再来。
 
 读完上手篇你应该能：引入一个依赖 → 写三行（或零行）配置 → 用发布 API 发布一条规则 → 像平时一样 `flowExecutor.execute2Resp(...)` 执行它。
 
-> 本能力由根级独立父模块 `liteflow-rule-db` 聚合的四个插件模块提供，随 `2.16.1` 发布：
-> - **`liteflow-rule-db-sql`** / **`liteflow-rule-db-redis`**：增量 + 轮询模型（seq 轮询 + 周期对账收敛）。
+> 本能力由根级独立父模块 `liteflow-rule-db` 聚合的六个插件模块提供，随 `2.16.1` 发布：
+> - **`liteflow-rule-db-sql`** / **`liteflow-rule-db-postgresql`** / **`liteflow-rule-db-mongodb`** / **`liteflow-rule-db-redis`**：增量 + 轮询模型（seq 轮询 + 周期对账收敛）。
 > - **`liteflow-rule-db-zk`** / **`liteflow-rule-db-etcd`**：监听模型（watch 实时推送 + 周期对账收敛）。
 >
-> 它们不属于 `liteflow-rule-plugin` 下原有的 `liteflow-rule-sql` / `liteflow-rule-redis` / `liteflow-rule-zk` / `liteflow-rule-etcd` 等 6 个「启动拼 XML」式插件，双方**完全独立、互不干扰**——旧的不会改动一行，新模式是纯增量。四个 Rule-DB 插件**同一时刻 classpath 只能有一个**（启动时检测到多个会直接报错）。
+> 它们不属于 `liteflow-rule-plugin` 下原有的「启动拼 XML」式插件，双方**完全独立、互不干扰**。六个 Rule-DB 插件**同一时刻 classpath 只能有一个**（启动时检测到多个会直接报错）。
 
 ---
 
@@ -37,9 +37,9 @@ LiteFlow 的 Rule-DB 模式让规则和脚本**真正以 SQL 数据库 / Redis /
 Rule-DB 模式把这两件事一次性解决：
 
 1. **存储是权威源，JVM 只是缓存。** 任何写入（发布/删除）都走发布 API，原子完成「更新内容 + 版本号 +1 + 写变更日志」。所有节点通过「**变更通知 + 周期对账**」两条腿收敛，即使通知丢失，对账周期内也必然收敛——一致性语义是**最终收敛、秒级窗口**。变更通知的具体形式随后端而异：
-   - **SQL / Redis**：seq 序号轮询（默认 3s 一次）。
+   - **SQL / PostgreSQL / MongoDB / Redis**：seq 序号轮询（默认 3s 一次）。
    - **ZooKeeper / etcd**：长连接 watch 实时推送（毫秒级）。
-   - 四者都叠加一条 **周期全量对账**（默认 60s）作为最终兜底。
+   - 六者都叠加一条 **周期全量对账**（默认 60s）作为最终兜底。
 2. **JVM 内存占用与规则总量解耦。** 常驻内存的只有「id → 版本戳 + 轻量元数据」索引；EL 文本、脚本源码、编译产物全部进**有界缓存**（容量按 chain 条数配），按 LRU 淘汰，淘汰后退回「影子」状态，下次执行再懒加载。
 
 一句话划清边界：**老的 6 个插件 = 启动一次性灌库，之后各节点各跑各的；Rule-DB = 存储永远是权威，JVM 只缓存热规则，所有节点最终一致。**
@@ -231,7 +231,7 @@ publisher.removeScript(RemoveRuleRequest.builder().targetId("s1").build());
 
 ## 4. 快速上手（ZooKeeper）
 
-zk / etcd 与 SQL / Redis 的区别在于：它们用**长连接 watch 实时推送**感知变更（毫秒级），而不是 seq 轮询；周期对账仍作为兜底。
+zk / etcd 与 SQL / PostgreSQL / MongoDB / Redis 的区别在于：它们用**长连接 watch 实时推送**感知变更（毫秒级），而不是 seq 轮询；周期对账仍作为兜底。
 
 ### Step 1：引入依赖
 
@@ -331,6 +331,57 @@ etcd 用 **KV revision** 作变更序号，watch 按 revision 区间订阅。etc
 
 同前，照常 `flowExecutor.execute2Resp(...)`。
 
+## 5.1 快速上手（PostgreSQL）
+
+引入 `liteflow-rule-db-postgresql`，配置独立 JDBC 地址；如果容器中已有 `DataSource`，也可以省略连接配置并自动复用：
+
+```properties
+liteflow.rule-db.postgresql.url=jdbc:postgresql://127.0.0.1:5432/liteflow
+liteflow.rule-db.postgresql.username=postgres
+liteflow.rule-db.postgresql.password=your-password
+liteflow.rule-db.postgresql.auto-init-table=true
+```
+
+独立发布程序使用 `PostgresqlPublisherConfig`：
+
+```java
+RulePublisher publisher = RulePublisherFactory.create(
+        PostgresqlPublisherConfig.builder()
+                .applicationName("your-app")
+                .url("jdbc:postgresql://127.0.0.1:5432/liteflow")
+                .username("postgres")
+                .password("your-password")
+                .build());
+publisher.publishChain(PublishChainRequest.builder()
+        .chainId("orderChain").el("THEN(a, b)").build());
+```
+
+PostgreSQL 使用数据库事务原子提交内容、业务版本和 `change_log`，变更通过 seq 轮询加周期对账收敛。
+
+## 5.2 快速上手（MongoDB）
+
+引入 `liteflow-rule-db-mongodb`，配置 MongoDB URI；容器中已有 `MongoClient` bean 时可以不配 URI：
+
+```properties
+liteflow.rule-db.mongodb.uri=mongodb://127.0.0.1:27017/?replicaSet=rs0
+liteflow.rule-db.mongodb.database=liteflow
+```
+
+独立发布程序使用 `MongoPublisherConfig`：
+
+```java
+RulePublisher publisher = RulePublisherFactory.create(
+        MongoPublisherConfig.builder()
+                .applicationName("your-app")
+                .uri("mongodb://127.0.0.1:27017/?replicaSet=rs0")
+                .database("liteflow")
+                .build());
+publisher.publishChain(PublishChainRequest.builder()
+        .chainId("orderChain").el("THEN(a, b)").build());
+```
+
+MongoDB 后端使用多文档事务原子发布规则，并使用快照事务读取一致的 Manifest 和序号基线，因此整个后端都要求**副本集或分片集群**；standalone MongoDB 不受支持。
+
 ---
 
 上手篇到此结束。下面参考篇是逐项细节，按需查阅。
@@ -341,9 +392,9 @@ etcd 用 **KV revision** 作变更序号，watch 按 revision 区间订阅。etc
 
 ## 6. 配置参考
 
-所有 Rule-DB 配置都在 `liteflow.rule-db.*` 命名空间下，绑定到 `com.yomahub.liteflow.property.RuleDbConfig`。配置是**嵌套结构**：通用项在 `liteflow.rule-db.*`，缓存项在 `liteflow.rule-db.cache.*`，同步项在 `liteflow.rule-db.sync.*`，各后端专属项在 `liteflow.rule-db.sql.*` / `.redis.*` / `.zk.*` / `.etcd.*`。能推断的绝不让用户配；必须配的压到最少。
+所有 Rule-DB 配置都在 `liteflow.rule-db.*` 命名空间下，绑定到 `com.yomahub.liteflow.property.RuleDbConfig`。配置是**嵌套结构**：通用项在 `liteflow.rule-db.*`，缓存项在 `liteflow.rule-db.cache.*`，同步项在 `liteflow.rule-db.sync.*`，各后端专属项分别位于 `.sql.*` / `.postgresql.*` / `.mongodb.*` / `.redis.*` / `.zk.*` / `.etcd.*`。
 
-### 通用配置（四个后端共用）
+### 通用配置（六个后端共用）
 
 | 配置项 | 默认 | 说明 |
 |---|---|---|
@@ -351,7 +402,7 @@ etcd 用 **KV revision** 作变更序号，watch 按 revision 区间订阅。etc
 | `liteflow.rule-db.application-name` | Spring Boot 应用自动取 `spring.application.name` | 多应用共库的隔离维度。同一套存储里不同 `application-name` 的规则互不可见。非 Spring / Solon 环境或未配 `spring.application.name` 时回落为 `default`——**多应用共库时务必保证各应用取值不同**，否则会互相读写对方的规则。 |
 | `liteflow.rule-db.cache.capacity` | `500` | 有界缓存容量（按 chain 条数计）。超出按 LRU 淘汰，淘汰的 chain 退回影子状态，其引用的脚本引用计数减一。 |
 | `liteflow.rule-db.cache.preload-chain-ids` | 空 | 启动预热的 chain id 列表（逗号分隔）。关键链路建议列在这里，抹平冷启动的首次回源尖刺。预热失败只记一条 warn、不会阻断启动。 |
-| `liteflow.rule-db.sync.poll-seconds` | `3`（SQL / Redis） | 变更序号轮询周期。**仅 SQL / Redis 走轮询**；zk / etcd 用 watch，该项对它们不生效。 |
+| `liteflow.rule-db.sync.poll-seconds` | `3`（SQL / PostgreSQL / MongoDB / Redis） | 变更序号轮询周期；zk / etcd 用 watch，该项对它们不生效。 |
 | `liteflow.rule-db.sync.reconcile-seconds` | `60` | 清单对账周期，全量 diff 索引与缓存。无论通知还是轮询都丢了的极端情况下，这个周期是收敛的最终保证。 |
 | `liteflow.rule-db.sync.fetch-retry-times` | `3` | 回源拉取失败的重试次数。 |
 
@@ -370,7 +421,29 @@ etcd 用 **KV revision** 作变更序号，watch 按 revision 区间订阅。etc
 
 > **生产建议用容器 DataSource（连接池）。** 走 `url` 直连时，框架用 `DriverManager` 裸连接，每次回源都建连、无池化——仅适合开发/测试。生产环境配好 HikariCP 等连接池的 `DataSource` bean，让插件复用（姿势 A）。
 
-> SQL 插件当前发布支持矩阵为 **MySQL / MariaDB**；H2 仅用于自动化测试。`auto-init-table` 会根据数据库产品选择 MySQL/MariaDB 或 H2 DDL，不会再把未知数据库误判成 H2。MySQL/MariaDB DDL 显式使用 `utf8mb4`；手工建表也必须保持该字符集，才能与 Publisher 的 UTF-8 字节边界校验一致。PostgreSQL、Oracle、SQL Server 等数据库尚未通过兼容矩阵，不在本版本支持范围内。
+> SQL 插件当前发布支持矩阵为 **MySQL / MariaDB**；PostgreSQL 请使用独立的 `liteflow-rule-db-postgresql`。Oracle、SQL Server 等数据库不在本版本支持范围内。
+
+### PostgreSQL 专属配置（`liteflow-rule-db-postgresql`）
+
+| 配置项 | 默认 | 说明 |
+|---|---|---|
+| `liteflow.rule-db.postgresql.url` | — | PostgreSQL JDBC URL；不配则自动查找容器 `DataSource`。 |
+| `liteflow.rule-db.postgresql.username` / `.password` | — | JDBC 认证信息。 |
+| `liteflow.rule-db.postgresql.driver-class-name` | `org.postgresql.Driver` | 通常无需配置。 |
+| `liteflow.rule-db.postgresql.datasource-bean-name` | 自动查找 | 多数据源时指定 bean。 |
+| `liteflow.rule-db.postgresql.table-prefix` | `lf_` | 表名前缀；只允许 ASCII 字母、数字、下划线，最长 52 个字符。 |
+| `liteflow.rule-db.postgresql.auto-init-table` | `false` | 是否执行模块内 PostgreSQL DDL。 |
+| `liteflow.rule-db.postgresql.change-log-batch-size` | `1000` | 单批变更日志上限。 |
+
+### MongoDB 专属配置（`liteflow-rule-db-mongodb`）
+
+| 配置项 | 默认 | 说明 |
+|---|---|---|
+| `liteflow.rule-db.mongodb.uri` | — | MongoDB URI；不配则自动查找容器 `MongoClient`；必须连接副本集或分片集群。 |
+| `liteflow.rule-db.mongodb.database` | `liteflow` | 数据库名。 |
+| `liteflow.rule-db.mongodb.collection-prefix` | `lf_` | Collection 前缀。 |
+| `liteflow.rule-db.mongodb.mongo-client-bean-name` | 自动查找 | 多 `MongoClient` 时指定 bean。 |
+| `liteflow.rule-db.mongodb.change-log-batch-size` | `1000` | 单批变更日志文档上限。 |
 
 ### Redis 专属配置（`liteflow-rule-db-redis`）
 
@@ -508,16 +581,33 @@ DDL 随 `liteflow-rule-db-sql` 模块提供：[`liteflow-rule-db/liteflow-rule-d
 
 变更序号用 etcd 的 **KV revision**。watch 按 revision 区间订阅 meta 前缀。etcd 会定期 compact 历史 revision——一旦节点位点落后到已 compact 的 revision，watch 会报 revision compacted 错误，此时自动降级为一次全量对账后重新从最新 revision 续上 watch。和 zk 一样，etcd 后端没有独立 changelog，不需要清理日志。
 
+### 7.5 PostgreSQL 三张表
+
+PostgreSQL 使用 `chain`、`script`、`change_log` 三张表，逻辑字段与 SQL 后端一致，但 DDL 使用 `BIGSERIAL`、`BOOLEAN` 和 `TIMESTAMPTZ`。完整 DDL 位于 [`postgresql/ddl.sql`](../liteflow-rule-db/liteflow-rule-db-postgresql/src/main/resources/postgresql/ddl.sql)。Publisher 使用单事务写正文并通过 `INSERT ... RETURNING seq` 取得变更序号。
+
+### 7.6 MongoDB Collection
+
+默认创建以下四个 Collection，并自动建立 Manifest 与变更轮询所需索引：
+
+| Collection | 内容 |
+|---|---|
+| `lf_chain` | chain 元数据与正文，`_id` 由 applicationName + chainId 组成。 |
+| `lf_script` | script 元数据与正文。 |
+| `lf_sequence` | 每个 applicationName 独立的连续 seq。 |
+| `lf_change_log` | `seq`、目标类型、目标 id、操作和业务版本。 |
+
+Manifest 查询只投影元数据字段，不读取 EL／脚本正文，并通过快照事务保证元数据与 sequence 基线一致。Publisher 在一个 MongoDB 多文档事务里同时更新内容、sequence 和 change log；因此运行与发布都必须连接支持事务的副本集或分片集群。
+
 ---
 
 ## 8. 发布协议与写入规范
 
 ### 8.1 推荐：统一发布 API
 
-四个后端共用一套发布接口 `com.yomahub.liteflow.publisher.RulePublisher`，通过 `RulePublisherFactory.create(config)` 按你传入的后端配置实例化。**这是推荐写入方式**，尤其适合独立的管理后台（只依赖一个插件 jar、不拉起 FlowExecutor、不依赖全局 `LiteflowConfig`）。
+六个后端共用一套发布接口 `com.yomahub.liteflow.publisher.RulePublisher`，通过 `RulePublisherFactory.create(config)` 按你传入的后端配置实例化。**这是推荐写入方式**，尤其适合独立的管理后台（只依赖一个插件 jar、不拉起 FlowExecutor、不依赖全局 `LiteflowConfig`）。
 
 ```java
-// 以 Redis 为例；SQL/zk/etcd 换对应的 XxxPublisherConfig
+// 以 Redis 为例；其他后端换成对应的 XxxPublisherConfig
 RulePublisher publisher = RulePublisherFactory.create(
         RedisPublisherConfig.builder()
                 .address("redis://127.0.0.1:6379")
@@ -531,10 +621,10 @@ PublishResult r = publisher.publishChain(PublishChainRequest.builder()
         .namespace("ns1")         // 可选：命名空间
         .build());
 r.getVersion();   // 新版本号
-r.getSequence();  // 变更序号（SQL seq / Redis seq / zk zxid / etcd revision）
+r.getSequence();  // 变更序号（SQL/PostgreSQL/MongoDB/Redis seq，zk zxid，etcd revision）
 ```
 
-四个请求类型都是不可变 builder 对象：
+三个请求类型都是不可变 builder 对象，另外返回一个 `PublishResult`：
 
 - `PublishChainRequest`：`chainId` / `el` / `route`(可空) / `namespace`(可空) / `expectedVersion`(可空)。
 - `PublishScriptRequest`：`nodeId` / `script` / `name`(可空) / `type`（`script`/`boolean_script`/`switch_script`/`for_script`） / `language`(可空) / `expectedVersion`(可空)。发布时框架自算 md5，`version` 由存储层自增。
@@ -549,11 +639,13 @@ r.getSequence();  // 变更序号（SQL seq / Redis seq / zk zxid / etcd revisio
 
 `VersionConflictException`、配置/校验错误分别有独立异常类型（`com.yomahub.liteflow.publisher.exception.*`），方便上层区分「冲突重试」与「参数错误」。
 
-**生命周期：** `RulePublisher` 实现 `AutoCloseable`。SQL 后端每次操作借连接、`close()` 是空操作；**Redis / zk / etcd 后端的 publisher 持有客户端连接，用完必须 `close()`**（推荐 try-with-resources）。注意：执行侧（节点进程）通过 SPI 自动装配 provider，**不需要**你自己创建 publisher；publisher 只在管理后台/发布工具侧手动创建。
+**生命周期：** `RulePublisher` 实现 `AutoCloseable`。SQL / PostgreSQL 后端每次操作借连接；Redis / MongoDB / zk / etcd 可能持有客户端连接，用完必须 `close()`（推荐 try-with-resources）。外部传入的 `DataSource`、`MongoClient` 或其他客户端仍归调用方所有，不会被 Publisher 关闭。
 
 **事务/原子性保证：**
 
 - **SQL**：单事务内完成 UPSERT 内容行 + INSERT change_log，回滚一起回滚。
+- **PostgreSQL**：单事务内完成 UPSERT 内容行 + INSERT change_log，并用 `RETURNING seq` 返回提交序号。
+- **MongoDB**：多文档事务内完成内容 CAS、sequence 自增和 change_log 插入。
 - **Redis**：一段 Lua 脚本在 Redis 单线程内原子完成 HSET 内容 → SADD 索引 → INCR seq → ZADD changelog，四步要么全成要么全不成，中间状态不可见。
 - **zk**：一个 multi-op 事务内原子写 meta + content znode。
 - **etcd**：一个事务（Txn）内原子写 meta + content key。
@@ -570,13 +662,15 @@ publisher.removeChain("orderChain");
 publisher.removeScript("s1");
 ```
 
-它只暴露最常用的双参/单参重载，**不支持** route / namespace / expectedVersion。需要这些能力时请用 [§8.1](#81-推荐统一发布-api) 的统一 API（SQL 对应 `SqlPublisherConfig`，可直接传 `DataSource`）。Redis / zk / etcd 没有等效门面，统一走 [§8.1](#81-推荐统一发布-api)。
+它只暴露最常用的双参/单参重载，**不支持** route / namespace / expectedVersion。其他后端统一走 [§8.1](#81-推荐统一发布-api)。
 
 ### 8.3 停用（enable=0）
 
 v1 的 Publisher **没有** `enableChain/enableScript` API（留作后续）。如需临时停用而不删除，可直写存储把 `enable` 置 0：
 
 - SQL：`UPDATE lf_chain SET enable=0 WHERE application_name=? AND chain_id=?`
+- PostgreSQL：`UPDATE lf_chain SET enable=FALSE WHERE application_name=? AND chain_id=?`
+- MongoDB：更新对应文档的 `enable=false` 并递增 `version`。
 - Redis：`HSET {prefix}:{app}:chain:{id} enable 0`
 - zk / etcd：把对应 meta 节点里的 enable 标志置 0（编码见各后端 `*RecordCodec`）。
 
@@ -592,6 +686,8 @@ v1 的 Publisher **没有** `enableChain/enableScript` API（留作后续）。�
 2. `INSERT INTO lf_change_log (application_name, target_type, target_id, op, version) VALUES (...)`。
 3. 提交事务（回滚要一起回滚）。
 4. 删除场景：DELETE 内容行 + INSERT 一条 `op=DELETE` 的 change_log，同样一个事务。
+
+PostgreSQL 直写遵循同一事务协议；MongoDB 直写必须在一个多文档事务内完成正文 CAS、`lf_sequence` 自增和 `lf_change_log` 插入。standalone MongoDB 无法满足该协议。
 
 **Redis 直写规范**：必须用一段 Lua 脚本完成 HSET 内容 → SADD 索引 → INCR seq → ZADD changelog 四步（脚本可参考 [`lua/publish-chain.lua`](../liteflow-rule-db/liteflow-rule-db-redis/src/main/resources/lua/publish-chain.lua)），**不能用普通命令拼**——拼出来在多命令之间存在竞态，可能让别的客户端读到「内容已更新但 seq 没推」的中间态。
 
@@ -631,11 +727,13 @@ Rule-DB 的多节点收敛靠两条独立的机制叠加，任何一条都能把
 | 后端 | 变更通知腿 | 周期 | 对账腿 |
 |---|---|---|---|
 | **SQL** | seq 轮询（`SELECT MAX(seq)`） | `poll-seconds`（默认 3s） | 全量对账，`reconcile-seconds`（默认 60s） |
+| **PostgreSQL** | seq 轮询（`SELECT MAX(seq)`） | `poll-seconds`（默认 3s） | 同上 |
+| **MongoDB** | seq 轮询（sequence + change_log） | `poll-seconds`（默认 3s） | 同上 |
 | **Redis** | seq 轮询（`GET seq`） | `poll-seconds`（默认 3s） | 同上 |
 | **ZooKeeper** | watch 实时推送（CuratorCache 监听 meta 节点） | 毫秒级 | 同上 |
 | **etcd** | watch 实时推送（按 revision 订阅） | 毫秒级 | 同上 |
 
-zk / etcd 的 watch 是毫秒级实时推送，轮询腿对它们不生效；SQL / Redis 没有推送通道，靠 seq 轮询。无论哪种，**周期对账都是兜底**——通知/轮询都失效也必收敛。
+zk / etcd 的 watch 是毫秒级实时推送，轮询腿对它们不生效；SQL / PostgreSQL / MongoDB / Redis 没有推送通道，靠 seq 轮询。无论哪种，**周期对账都是兜底**——通知／轮询都失效也必收敛。
 
 > Redis 模式**没有 pub/sub 推送**。有些同类设计会用 Redis `PUBLISH`/`SUBSCRIBE` 做毫秒级推送，本实现没有采用——Redis 的变更感知和 SQL 一样靠 seq 轮询。如果你依赖更快的 Redis 收敛，把 `poll-seconds` 调小（代价是更频繁的 `GET seq`）。
 
@@ -645,6 +743,7 @@ zk / etcd 的 watch 是毫秒级实时推送，轮询腿对它们不生效；SQL
 
 - zk / etcd 模式：watch 毫秒级 + 对账 60s → 最迟 60s 内全集群收敛（实际多数情况毫秒级）。
 - SQL 模式：轮询 3s + 对账 60s → 最迟 60s 内全集群收敛（实际多数情况 3s 内）。
+- PostgreSQL / MongoDB 模式：轮询 3s + 对账 60s → 最迟 60s 内全集群收敛（实际多数情况 3s 内）。
 - Redis 模式：轮询 3s + 对账 60s → 最迟 60s 内全集群收敛（实际多数情况 3s 内）。
 
 版本号单调递增，**不会新旧回跳**：变更通知按版本号做幂等保护，迟到的旧版本通知会被忽略，不会把已收敛的新版打回旧版。
@@ -694,7 +793,7 @@ execute2Resp(chainId)
 
 - **`cache.capacity`**：按你的热点 chain 条数估，默认 500 够大多数应用。设小了频繁淘汰→频繁回源；设大了多吃堆内存。脚本没有独立容量参数——它跟 chain 联动淘汰（chain 被淘汰时，它引用的脚本引用计数减一，归零时一起清）。
 - **`cache.preload-chain-ids`**：把首屏/高 QPS 的关键 chain 列在这里，启动时立即拉取编译，抹平冷启动尖刺。非关键链路不必预热，懒加载就够了。
-- **`sync.poll-seconds`**（SQL/Redis）：觉得 3s 不够及时可调小（代价是更频繁的序号查询）；zk/etcd 用 watch，此项不生效。
+- **`sync.poll-seconds`**（SQL / PostgreSQL / MongoDB / Redis）：觉得 3s 不够及时可调小（代价是更频繁的序号查询）；zk / etcd 用 watch，此项不生效。
 - **`sync.reconcile-seconds`**：60s 是经验值，是「极端兜底」周期，调小意义不大、反而增加全量 diff 开销。
 
 ### 10.4 v1 实现注记：惰性失效
@@ -771,8 +870,8 @@ GET /actuator/liteflow/ruledb
 | **启动时存储不可用** | `FlowExecutor` 初始化阶段拉取 manifest 失败会**直接抛异常、启动失败**（不会降级为空规则跑起来）。Rule-DB 模式的启动强依赖存储可用——和下面「运行期存储挂了」是两回事。 |
 | **运行期存储不可用，缓存命中** | 照常执行，完全不受影响。**这是核心可用性属性**——存储挂了不影响已缓存链路跑。（隐含前提：故障期间没有针对该 chain 的变更被应用；一旦变更把缓存态失效，就落入下一行「未命中」的语义。） |
 | **运行期存储不可用，缓存未命中** | fetch 按 `fetch-retry-times`（默认 3）重试，仍失败抛 `ChainLoadException`（区别于 `ChainNotFoundException`——前者是「规则存在但取不回来」，后者是「规则不存在」）。存储恢复后下次执行自动回源，无需干预。 |
-| **变更通道故障**（轮询报错 / watch 断线） | 标记 `DEGRADED` 并重试。SQL/Redis 轮询失败会在下个周期重试；zk 连接断开由 Curator 自动重连，重连后自动补订阅并触发全量对账；etcd watch 失败（含 revision compacted）按指数退避重试，仍失败则触发全量对账。断线窗口内丢失的变更由周期对账（≤`reconcile-seconds`）兜底补齐。 |
-| **change_log / changelog 被清理或损坏** | SQL 的 `seq` 是全表自增序号，不同 `application_name` 之间出现跳号是正常现象；当应用水位已前进却读不到对应行，或日志中的 `target_type` / `op` 无法解析时，SQL 会标记 `DEGRADED` 并立即请求全量对账。Redis 仍按连续应用级序号检测断档。 |
+| **变更通道故障**（轮询报错 / watch 断线） | 标记 `DEGRADED` 并重试。SQL / PostgreSQL / MongoDB / Redis 轮询失败会在下个周期重试；zk / etcd 断线后重建监听并触发全量对账。断线窗口由周期对账兜底。 |
+| **change_log / changelog 被清理或损坏** | SQL / PostgreSQL 的 `seq` 是全表自增序号，不同 `application_name` 之间出现跳号是正常现象；MongoDB / Redis 则使用连续的应用级序号。当应用水位已前进却读不到变更，出现序号断档，或日志中的目标类型／操作无法解析时，对应后端会标记 `DEGRADED` 并立即请求全量对账。 |
 | **fetch 到 enable=false 或行/节点不存在** | 本次执行抛 `ChainLoadException`；下个对账周期该条目从索引移除，之后执行报 chain 不存在（`ChainNotFoundException` 语义）。 |
 | **变更已感知但回源新版失败** | v1 是惰性失效（见 [§10.4](#104-v1-实现注记惰性失效)）：变更到达即失效缓存态，之后每次执行都重试回源，成功前该 chain 执行失败（`ChainLoadException`）。**发布动作本身有小概率把可用的旧版换成暂不可用**——请避开存储抖动窗口发布。 |
 | **SQL 缺表且未开 `auto-init-table`** | 首次访问存储时报 `ConfigErrorException`，错误信息内含完整可复制执行的 DDL。 |
@@ -787,20 +886,22 @@ GET /actuator/liteflow/ruledb
 
 1. **与 `rule-source` 互斥。** 同时配置 `liteflow.rule-source` 和 `liteflow.rule-db.*` 会启动直接报错。Rule-DB 和老插件模式不能混用。
 
-2. **四个 Rule-DB 插件同一时刻 classpath 只能有一个。** `liteflow-rule-db-sql` / `-redis` / `-zk` / `-etcd` 四选一。同时存在多个会启动报错要求只保留一个。
+2. **六个 Rule-DB 插件同一时刻 classpath 只能有一个。** `liteflow-rule-db-sql` / `-postgresql` / `-mongodb` / `-redis` / `-zk` / `-etcd` 六选一。同时存在多个会启动报错要求只保留一个。
 
 3. **Redis Cluster 当前不支持原子发布（重要）。** `RedisRulePublisher` 的 Lua 脚本会触碰 4 个键（`chain:{id}`、`chain-ids`、`seq`、`changelog`），这些键**没有共享 Redis hash-tag**，在 Redis Cluster 下会落在不同 slot，`EVAL` 会以 `CROSSSLOT` 错误失败。
    - **v1 支持的部署**：单节点、哨兵（sentinel）。
-   - **Redis Cluster**：v1 暂不支持原子发布，后续版本会通过 hash-tag 路由（`{app}` 作 hash-tag 把所有键固定到同一 slot）解决。在此之前，需要 Redis Cluster 的场景请先用 SQL / zk / etcd 模式，或等 hash-tag 支持。
+   - **Redis Cluster**：v1 暂不支持原子发布，后续版本会通过 hash-tag 路由（`{app}` 作 hash-tag 把所有键固定到同一 slot）解决。在此之前，需要 Redis Cluster 的场景请先用 SQL / PostgreSQL / MongoDB / zk / etcd 模式，或等 hash-tag 支持。
 
-4. **一致性语义是最终收敛、秒级窗口，不是原子切换/线性一致。** 见 [§9.3](#93-一致性语义务必读)。要求全集群同一逻辑时刻切版的场景，当前版本不满足。
+4. **MongoDB 必须支持多文档事务。** 运行时的 Manifest 快照读取与 Publisher 都使用事务，因此只支持副本集或分片集群；standalone MongoDB 不受支持。
 
-5. **v1 不提供的实现（SPI 已就位、留作后续）：**
-   - nacos / apollo 的 Rule-DB 实现（SQL/Redis/zk/etcd 已实现）。`RuleRepository` SPI 在 core 里已经定义好，后续可按同一套契约扩展。
+5. **一致性语义是最终收敛、秒级窗口，不是原子切换/线性一致。** 见 [§9.3](#93-一致性语义务必读)。要求全集群同一逻辑时刻切版的场景，当前版本不满足。
+
+6. **v1 不提供的实现（SPI 已就位、留作后续）：**
+   - nacos / apollo 的 Rule-DB 实现。`RuleRepository` SPI 在 core 里已经定义好，后续可按同一套契约扩展。
    - `enableChain/enableScript` API（停用目前靠直写存储，见 [§8.3](#83-停用enable0)）。
    - 节点实例 ID 持久化（旧 sql 插件的 `NodeInstanceIdManageSpi` 能力）。
    - 管理 UI / 控制台。v1 只提供 Publisher API 与写入规范。
 
-6. **并发发布语义。** 不传 `expectedVersion` 时是无条件 UPSERT：已有行通过数据库行锁原子递增版本；多个发布者同时首发同一个 id 时，唯一键竞态会在事务保存点后自动转为更新，所有成功发布各自产生一个连续版本和一条 change log。传 `expectedVersion=0` 表示“仅当不存在时创建”，重复创建会明确抛 `VersionConflictException`；传正数表示按版本做 CAS 更新。
+7. **并发发布语义。** 不传 `expectedVersion` 时是无条件 UPSERT；传 `expectedVersion=0` 表示“仅当不存在时创建”；传正数表示按版本做 CAS 更新。六个后端都保证成功发布的业务版本单调递增。
 
-7. **手动 build 的 chain 可以与本模式共存，但 id 不要与存储中的 chain 撞车。** 通过 `LiteFlowChainELBuilder` 手动 build、且 id **不在**存储清单中的 chain 不受 Rule-DB 干预（对账只管理来源于清单的条目，不会把手写 chain 当成「存储中不存在」而删掉）。但如果手动 build 的 id 与存储中的 chain **相同**，懒加载/失效路径会用存储内容**覆盖**手动 build 的版本——撞车时以存储为准。请保证两边 id 集合不相交。
+8. **手动 build 的 chain 可以与本模式共存，但 id 不要与存储中的 chain 撞车。** 通过 `LiteFlowChainELBuilder` 手动 build、且 id **不在**存储清单中的 chain 不受 Rule-DB 干预（对账只管理来源于清单的条目，不会把手写 chain 当成「存储中不存在」而删掉）。但如果手动 build 的 id 与存储中的 chain **相同**，懒加载／失效路径会用存储内容**覆盖**手动 build 的版本——撞车时以存储为准。请保证两边 id 集合不相交。

@@ -22,6 +22,9 @@ public class RuleDbConfigBindingTest {
 		Assertions.assertEquals(5, liteflowConfig.getRuleDb().getSync().getPollSeconds());
 		Assertions.assertEquals(17, liteflowConfig.getRuleDb().getSync().getReconcileSeconds());
 		Assertions.assertEquals("sql_", liteflowConfig.getRuleDb().getSql().getTablePrefix());
+		Assertions.assertEquals("postgresql_", liteflowConfig.getRuleDb().getPostgresql().getTablePrefix());
+		Assertions.assertEquals("rule_db", liteflowConfig.getRuleDb().getMongodb().getDatabase());
+		Assertions.assertEquals("mongo_", liteflowConfig.getRuleDb().getMongodb().getCollectionPrefix());
 		Assertions.assertEquals("redis", liteflowConfig.getRuleDb().getRedis().getKeyPrefix());
 		Assertions.assertEquals("/etcd-rules", liteflowConfig.getRuleDb().getEtcd().getRootPath());
 		Assertions.assertEquals("/zk-rules", liteflowConfig.getRuleDb().getZk().getRootPath());

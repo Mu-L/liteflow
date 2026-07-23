@@ -18,6 +18,10 @@ public class RuleDbConfig {
 
 	private RuleDbSqlConfig sql = new RuleDbSqlConfig();
 
+	private RuleDbPostgresqlConfig postgresql = new RuleDbPostgresqlConfig();
+
+	private RuleDbMongoConfig mongodb = new RuleDbMongoConfig();
+
 	private RuleDbRedisConfig redis = new RuleDbRedisConfig();
 
 	private RuleDbEtcdConfig etcd = new RuleDbEtcdConfig();
@@ -62,6 +66,22 @@ public class RuleDbConfig {
 
 	public void setSql(RuleDbSqlConfig sql) {
 		this.sql = sql;
+	}
+
+	public RuleDbPostgresqlConfig getPostgresql() {
+		return postgresql;
+	}
+
+	public void setPostgresql(RuleDbPostgresqlConfig postgresql) {
+		this.postgresql = postgresql;
+	}
+
+	public RuleDbMongoConfig getMongodb() {
+		return mongodb;
+	}
+
+	public void setMongodb(RuleDbMongoConfig mongodb) {
+		this.mongodb = mongodb;
 	}
 
 	public RuleDbRedisConfig getRedis() {

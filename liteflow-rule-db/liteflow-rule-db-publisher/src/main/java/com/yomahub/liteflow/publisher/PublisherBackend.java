@@ -5,6 +5,10 @@ public enum PublisherBackend {
 
 	SQL,
 
+	POSTGRESQL,
+
+	MONGODB,
+
 	REDIS,
 
 	ETCD,

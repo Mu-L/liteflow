@@ -16,33 +16,13 @@
     <dependencies>
         <dependency>
             <groupId>com.yomahub</groupId>
-            <artifactId>liteflow-spring-boot-starter</artifactId>
-            <version>${revision}</version>
-        </dependency>
-
-        <dependency>
-            <groupId>com.yomahub</groupId>
             <artifactId>liteflow-rule-db-redis</artifactId>
             <version>${revision}</version>
         </dependency>
 
         <dependency>
-            <groupId>com.yomahub</groupId>
-            <artifactId>liteflow-script-groovy</artifactId>
-            <version>${revision}</version>
-            <scope>test</scope>
-        </dependency>
-
-        <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-test</artifactId>
-        </dependency>
-
-        <!-- embedded-redis：测试期拉起真实 redis 二进制（Linux/Mac），验证 Lua/cjson + 轮询端到端 -->
-        <dependency>
-            <groupId>com.github.codemonstur</groupId>
-            <artifactId>embedded-redis</artifactId>
-            <version>1.4.3</version>
             <scope>test</scope>
         </dependency>
     </dependencies>
