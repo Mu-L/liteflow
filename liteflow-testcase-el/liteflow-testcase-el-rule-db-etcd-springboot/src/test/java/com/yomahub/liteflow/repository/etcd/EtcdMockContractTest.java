@@ -206,6 +206,10 @@ class EtcdMockContractTest {
 			return new Range(entries, revision);
 		}
 
+		@Override public Range range(String prefix, long pinnedRevision) {
+			return range(prefix);
+		}
+
 		@Override public synchronized TxnResult putPair(String metadataKey, long expectedModRevision,
 				String contentKey, String content, String metadata) {
 			if (failNextTransaction) {

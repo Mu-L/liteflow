@@ -16,6 +16,10 @@ final class EtcdKeys {
 		this.base = root + "/" + trimSlashes(applicationName.trim());
 	}
 
+	String rootPrefix() {
+		return base + "/";
+	}
+
 	String chainMetaPrefix() {
 		return base + "/chains/meta/";
 	}

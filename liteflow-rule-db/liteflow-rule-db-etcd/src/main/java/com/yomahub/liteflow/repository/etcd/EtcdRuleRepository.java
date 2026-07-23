@@ -26,7 +26,10 @@ public final class EtcdRuleRepository implements RuleRepository {
 	@Override
 	public RuleManifest fetchManifest() {
 		EtcdKvFacade.Range chains = kv.range(keys.chainMetaPrefix());
-		EtcdKvFacade.Range scripts = kv.range(keys.scriptMetaPrefix());
+		// Pin the second read to the first read's revision so the manifest is a
+		// consistent snapshot; changes landing between the two reads are picked up
+		// by the watch stream from this baseline instead of being silently lost.
+		EtcdKvFacade.Range scripts = kv.range(keys.scriptMetaPrefix(), chains.revision());
 		List<ChainMeta> chainMetas = new ArrayList<>();
 		for (EtcdKvFacade.Entry entry : chains.entries()) {
 			if (codec.enabled(entry.value())) {
@@ -42,7 +45,7 @@ public final class EtcdRuleRepository implements RuleRepository {
 		RuleManifest manifest = new RuleManifest();
 		manifest.setChains(chainMetas);
 		manifest.setScripts(scriptMetas);
-		manifest.setLatestSeq(Math.max(chains.revision(), scripts.revision()));
+		manifest.setLatestSeq(chains.revision());
 		return manifest;
 	}
 

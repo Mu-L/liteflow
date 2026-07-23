@@ -59,11 +59,24 @@ final class ZkCacheChangeSource implements RuleChangeSource {
 			if (closed || opened) { return; }
 			this.listener = listener;
 			opened = true;
-			chainCache = cache(paths.chainMetaRoot(), ChangeRecord.TargetType.CHAIN);
-			scriptCache = cache(paths.scriptMetaRoot(), ChangeRecord.TargetType.SCRIPT);
-			client.getConnectionStateListenable().addListener(connectionListener);
-			chainCache.start();
-			scriptCache.start();
+			try {
+				chainCache = cache(paths.chainMetaRoot(), ChangeRecord.TargetType.CHAIN);
+				scriptCache = cache(paths.scriptMetaRoot(), ChangeRecord.TargetType.SCRIPT);
+				client.getConnectionStateListenable().addListener(connectionListener);
+				chainCache.start();
+				scriptCache.start();
+			}
+			catch (RuntimeException e) {
+				// reset so a later open() can retry instead of being silently ignored
+				client.getConnectionStateListenable().removeListener(connectionListener);
+				closeQuietly(chainCache);
+				closeQuietly(scriptCache);
+				chainCache = null;
+				scriptCache = null;
+				this.listener = null;
+				opened = false;
+				throw e;
+			}
 		}
 	}
 
@@ -135,14 +148,27 @@ final class ZkCacheChangeSource implements RuleChangeSource {
 		return cache;
 	}
 
-	private void onEvent(String root, ChangeRecord.TargetType targetType,
+	void onEvent(String root, ChangeRecord.TargetType targetType,
 			CuratorCacheListener.Type eventType, ChildData oldData, ChildData data) {
 		ChildData current = eventType == CuratorCacheListener.Type.NODE_DELETED ? oldData : data;
 		if (current == null || current.getPath().equals(root)) { return; }
 		try {
 			String id = paths.idFrom(root, current.getPath());
 			boolean deleted = eventType == CuratorCacheListener.Type.NODE_DELETED;
-			long revision = deleted ? deletionRevision(root, current) : current.getStat().getMzxid();
+			long revision;
+			if (deleted) {
+				revision = deletionRevision(root);
+				if (revision < 0) {
+					// never guess a sequence for a delete: a fabricated one can be silently
+					// dropped by delivery de-duplication. reconcile instead.
+					markDegraded("cannot resolve delete revision for " + current.getPath());
+					requestReconcile();
+					return;
+				}
+			}
+			else {
+				revision = current.getStat().getMzxid();
+			}
 			long version = current.getData() == null ? 0 : codec.version(current.getData());
 			ChangeRecord.Op operation = deleted || !codec.enabled(current.getData())
 					? ChangeRecord.Op.DELETE : ChangeRecord.Op.UPSERT;
@@ -154,15 +180,16 @@ final class ZkCacheChangeSource implements RuleChangeSource {
 		}
 	}
 
-	private long deletionRevision(String root, ChildData oldData) {
+	private long deletionRevision(String root) {
 		try {
 			Stat rootStat = client.checkExists().forPath(root);
 			if (rootStat != null) { return Math.max(rootStat.getPzxid(), rootStat.getMzxid()); }
+			LOG.warn("rule-db zk metadata root {} is missing while resolving delete revision", root);
 		}
 		catch (Exception e) {
 			LOG.warn("rule-db zk cannot read delete revision for {}: {}", root, e.getMessage());
 		}
-		return oldData.getStat() == null ? Math.max(1, cursor + 1) : oldData.getStat().getMzxid();
+		return -1;
 	}
 
 	private void onChange(ChangeRecord change) {
@@ -238,6 +265,13 @@ final class ZkCacheChangeSource implements RuleChangeSource {
 	private void markDegraded(String message) {
 		synchronized (monitor) {
 			if (!closed) { health = health.degraded(message); }
+		}
+	}
+
+	private static void closeQuietly(CuratorCache cache) {
+		if (cache != null) {
+			try { cache.close(); }
+			catch (RuntimeException ignored) { }
 		}
 	}
 

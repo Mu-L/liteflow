@@ -41,22 +41,31 @@ final class ZkConnectionManager implements AutoCloseable {
 		else {
 			if (StrUtil.isBlank(connectString)) {
 				throw new ConfigErrorException("rule-db zk connectString must not be blank");
-				}
-				int session = sessionTimeout == null ? 60000 : sessionTimeout;
-				validateCredentials(username, password);
-				CuratorFrameworkFactory.Builder builder = CuratorFrameworkFactory.builder()
-						.connectString(connectString)
-						.sessionTimeoutMs(session)
-						.connectionTimeoutMs(Math.min(session, 15000))
-						.retryPolicy(new RetryNTimes(5, 1000));
-				if (StrUtil.isNotBlank(username)) {
-					builder.authorization("digest", (username + ":" + password).getBytes(StandardCharsets.UTF_8))
-							.aclProvider(creatorAclProvider());
-				}
-				this.client = builder.build();
-				this.owned = true;
+			}
+			int session = sessionTimeout == null ? 60000 : sessionTimeout;
+			if (session <= 0) {
+				throw new ConfigErrorException("rule-db zk sessionTimeout must be positive");
+			}
+			validateCredentials(username, password);
+			CuratorFrameworkFactory.Builder builder = CuratorFrameworkFactory.builder()
+					.connectString(connectString)
+					.sessionTimeoutMs(session)
+					.connectionTimeoutMs(Math.min(session, 15000))
+					.retryPolicy(new RetryNTimes(5, 1000));
+			if (StrUtil.isNotBlank(username)) {
+				builder.authorization("digest", (username + ":" + password).getBytes(StandardCharsets.UTF_8))
+						.aclProvider(creatorAclProvider());
+			}
+			this.client = builder.build();
+			this.owned = true;
 		}
-		startAndAwait();
+		try {
+			startAndAwait();
+		}
+		catch (RuntimeException e) {
+			close();
+			throw e;
+		}
 	}
 
 	CuratorFramework client() { return client; }

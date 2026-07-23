@@ -4,11 +4,11 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.yomahub.liteflow.repository.vo.ChangeRecord;
 
 /**
- * ChangeRecord ↔ JSON。字段：seq/targetType/targetId/op/version。
- *
- * <p>与 Lua 写入 changelog 的 JSON 对齐：cjson 产出 lower-camel 的
- * {@code {"seq":..,"targetType":"CHAIN","targetId":..,"op":"UPSERT","version":..}}，
- * 与 {@link ChangeRecord} 字段名逐一对应；枚举按名序列化，无需额外注解。
+ * Decodes {@link ChangeRecord} entries from the JSON written to the changelog
+ * ZSet by the Lua scripts. The Lua {@code cjson} output uses lower-camel field
+ * names ({@code seq/targetType/targetId/op/version}) matching the
+ * {@link ChangeRecord} properties, with enums serialized by name, so no extra
+ * annotations are required.
  *
  * @author Bryan.Zhang
  * @since 2.16.1
@@ -16,14 +16,6 @@ import com.yomahub.liteflow.repository.vo.ChangeRecord;
 public class ChangeCodec {
 
 	private static final ObjectMapper MAPPER = new ObjectMapper();
-
-	public static String toJson(ChangeRecord c) {
-		try {
-			return MAPPER.writeValueAsString(c);
-		} catch (Exception e) {
-			throw new RuntimeException("encode ChangeRecord failed: " + e.getMessage(), e);
-		}
-	}
 
 	public static ChangeRecord fromJson(String json) {
 		try {

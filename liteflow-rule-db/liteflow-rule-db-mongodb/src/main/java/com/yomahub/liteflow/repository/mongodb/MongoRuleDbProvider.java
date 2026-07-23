@@ -21,13 +21,18 @@ public final class MongoRuleDbProvider implements RuleDbProvider {
 		String applicationName = MongoStorageValidator.applicationNameOrDefault(
 				config == null ? null : config.getApplicationName());
 		this.connection = new MongoConnectionManager(mongodb);
-		MongoCollections names = new MongoCollections(mongodb.getCollectionPrefix());
-		MongoSchema.ensureIndexes(connection.database(), names);
-		this.repository = new MongoRuleRepository(connection.client(), connection.database(), names, applicationName);
-		int pollSeconds = config == null || config.getSync() == null || config.getSync().getPollSeconds() == null
-				? 3 : config.getSync().getPollSeconds();
-		int batchSize = mongodb.getChangeLogBatchSize() == null ? 1000 : mongodb.getChangeLogBatchSize();
-		this.changeSource = new MongoPollingChangeSource(repository, pollSeconds, batchSize);
+		try {
+			MongoCollections names = new MongoCollections(mongodb.getCollectionPrefix());
+			this.repository = new MongoRuleRepository(connection.client(), connection.database(), names, applicationName);
+			int pollSeconds = config == null || config.getSync() == null || config.getSync().getPollSeconds() == null
+					? 3 : config.getSync().getPollSeconds();
+			int batchSize = mongodb.getChangeLogBatchSize() == null ? 1000 : mongodb.getChangeLogBatchSize();
+			this.changeSource = new MongoPollingChangeSource(repository, pollSeconds, batchSize);
+		}
+		catch (RuntimeException e) {
+			connection.close();
+			throw e;
+		}
 	}
 
 	@Override public String type() { return "mongodb"; }

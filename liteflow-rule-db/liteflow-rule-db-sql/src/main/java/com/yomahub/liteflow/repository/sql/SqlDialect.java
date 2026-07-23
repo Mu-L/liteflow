@@ -49,6 +49,10 @@ public class SqlDialect {
 		return prefix() + "change_log";
 	}
 
+	public String changeLockTable() {
+		return prefix() + "change_lock";
+	}
+
 	private String ddlResource(Connection conn) {
 		try {
 			String product = conn.getMetaData().getDatabaseProductName();

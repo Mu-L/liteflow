@@ -25,6 +25,7 @@ public class RedisPollingChangeSource implements RuleChangeSource, ManualPolling
 	private final Object pollMonitor = new Object();
 	private final RedisRuleRepository repository;
 	private final int pollSeconds;
+	private final int batchSize;
 
 	private RuleChangeListener listener;
 	private ScheduledExecutorService scheduler;
@@ -34,14 +35,22 @@ public class RedisPollingChangeSource implements RuleChangeSource, ManualPolling
 	private boolean closed;
 
 	public RedisPollingChangeSource(RedisRuleRepository repository, int pollSeconds) {
+		this(repository, pollSeconds, RedisRuleRepository.DEFAULT_CHANGELOG_BATCH_SIZE);
+	}
+
+	public RedisPollingChangeSource(RedisRuleRepository repository, int pollSeconds, int batchSize) {
 		if (repository == null) {
 			throw new ConfigErrorException("rule-db redis repository must not be null");
 		}
 		if (pollSeconds <= 0) {
 			throw new ConfigErrorException("liteflow.rule-db.sync.poll-seconds must be positive");
 		}
+		if (batchSize <= 0) {
+			throw new ConfigErrorException("rule-db redis change-log batch size must be positive");
+		}
 		this.repository = repository;
 		this.pollSeconds = pollSeconds;
+		this.batchSize = batchSize;
 	}
 
 	@Override
@@ -121,27 +130,37 @@ public class RedisPollingChangeSource implements RuleChangeSource, ManualPolling
 			baseline = cursor;
 		}
 		try {
-			if (repository.fetchLatestSeq() <= baseline) {
+			long highWatermark = repository.fetchLatestSeq();
+			if (highWatermark <= baseline) {
 				markSuccessful();
 				return;
 			}
-			List<ChangeRecord> changes = repository.fetchChangesSince(baseline);
-			if (changes.isEmpty()) {
-				markSuccessful();
-				return;
-			}
-			if (isClosed()) {
-				return;
-			}
-			activeListener.onChanges(changes);
-			long deliveredCursor = baseline;
-			for (ChangeRecord change : changes) {
-				deliveredCursor = Math.max(deliveredCursor, change.getSeq());
-			}
-			synchronized (monitor) {
-				if (!closed) {
-					cursor = Math.max(cursor, deliveredCursor);
-					health = health.successful(cursor);
+			while (baseline < highWatermark) {
+				List<ChangeRecord> changes = repository.fetchChangesSince(baseline, batchSize);
+				if (changes.isEmpty()) {
+					markDegraded("rule-db redis change-log advanced but no entries were readable");
+					if (!isClosed()) {
+						activeListener.onReconcileRequired();
+					}
+					return;
+				}
+				if (isClosed()) {
+					return;
+				}
+				activeListener.onChanges(changes);
+				long deliveredCursor = baseline;
+				for (ChangeRecord change : changes) {
+					deliveredCursor = Math.max(deliveredCursor, change.getSeq());
+				}
+				if (deliveredCursor <= baseline) {
+					throw new IllegalStateException("rule-db redis change-log cursor did not advance");
+				}
+				baseline = deliveredCursor;
+				synchronized (monitor) {
+					if (!closed) {
+						cursor = Math.max(cursor, deliveredCursor);
+						health = health.successful(cursor);
+					}
 				}
 			}
 		}

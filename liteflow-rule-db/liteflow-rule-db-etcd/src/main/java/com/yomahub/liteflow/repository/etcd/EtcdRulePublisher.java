@@ -23,9 +23,20 @@ final class EtcdRulePublisher implements RulePublisher {
 
 	EtcdRulePublisher(EtcdPublisherConfig config) {
 		this.connection = new EtcdConnectionManager(config);
-		this.kv = new JetcdKvFacade(connection.client().getKVClient());
-		this.keys = new EtcdKeys(config.getRootPath(), config.applicationName());
-		this.codec = new EtcdRecordCodec();
+		try {
+			this.kv = new JetcdKvFacade(connection.client().getKVClient());
+			this.keys = new EtcdKeys(config.getRootPath(), config.applicationName());
+			this.codec = new EtcdRecordCodec();
+		}
+		catch (RuntimeException | Error e) {
+			try {
+				connection.close();
+			}
+			catch (RuntimeException closeError) {
+				e.addSuppressed(closeError);
+			}
+			throw e;
+		}
 	}
 
 	EtcdRulePublisher(EtcdKvFacade kv, EtcdKeys keys, EtcdRecordCodec codec) {

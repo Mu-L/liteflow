@@ -35,3 +35,7 @@ CREATE TABLE IF NOT EXISTS ${prefix}change_log (
   gmt_create TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX IF NOT EXISTS ${prefix}idx_app_seq ON ${prefix}change_log (application_name, seq);
+CREATE TABLE IF NOT EXISTS ${prefix}change_lock (
+  lock_id SMALLINT PRIMARY KEY
+);
+INSERT INTO ${prefix}change_lock (lock_id) VALUES (1) ON CONFLICT (lock_id) DO NOTHING;

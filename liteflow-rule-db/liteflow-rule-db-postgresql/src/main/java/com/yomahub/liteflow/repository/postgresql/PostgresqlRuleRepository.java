@@ -17,7 +17,7 @@ import java.util.ArrayList;
 import java.util.List;
 
 /** PostgreSQL authoritative repository for Rule-DB. */
-public final class PostgresqlRuleRepository implements RuleRepository {
+public class PostgresqlRuleRepository implements RuleRepository {
 
 	private final PostgresqlConnectionManager connectionManager;
 	private final PostgresqlDialect dialect;
@@ -39,32 +39,37 @@ public final class PostgresqlRuleRepository implements RuleRepository {
 		List<ChainMeta> chains = new ArrayList<>();
 		List<ScriptMeta> scripts = new ArrayList<>();
 		try (Connection connection = connection()) {
-			connection.setTransactionIsolation(Connection.TRANSACTION_REPEATABLE_READ);
-			connection.setAutoCommit(false);
-			try (PreparedStatement statement = connection.prepareStatement("SELECT chain_id, version, content_md5 FROM "
-					+ dialect.chainTable() + " WHERE application_name = ? AND enable = TRUE")) {
-				statement.setString(1, applicationName);
-				try (ResultSet resultSet = statement.executeQuery()) {
-					while (resultSet.next()) {
-						chains.add(new ChainMeta(resultSet.getString(1), resultSet.getLong(2), resultSet.getString(3)));
+			int previousIsolation = connection.getTransactionIsolation();
+			boolean previousAutoCommit = connection.getAutoCommit();
+			try {
+				connection.setTransactionIsolation(Connection.TRANSACTION_REPEATABLE_READ);
+				connection.setAutoCommit(false);
+				try (PreparedStatement statement = connection.prepareStatement("SELECT chain_id, version, content_md5 FROM "
+						+ dialect.chainTable() + " WHERE application_name = ? AND enable = TRUE")) {
+					statement.setString(1, applicationName);
+					try (ResultSet resultSet = statement.executeQuery()) {
+						while (resultSet.next()) {
+							chains.add(new ChainMeta(resultSet.getString(1), resultSet.getLong(2), resultSet.getString(3)));
+						}
 					}
 				}
-			}
-			try (PreparedStatement statement = connection.prepareStatement(
-					"SELECT node_id, version, content_md5, script_type, script_language, script_name FROM "
-							+ dialect.scriptTable() + " WHERE application_name = ? AND enable = TRUE")) {
-				statement.setString(1, applicationName);
-				try (ResultSet resultSet = statement.executeQuery()) {
-					while (resultSet.next()) {
-						scripts.add(new ScriptMeta(resultSet.getString(1), resultSet.getLong(2), resultSet.getString(3),
-								resultSet.getString(4), resultSet.getString(5), resultSet.getString(6)));
+				try (PreparedStatement statement = connection.prepareStatement(
+						"SELECT node_id, version, content_md5, script_type, script_language, script_name FROM "
+								+ dialect.scriptTable() + " WHERE application_name = ? AND enable = TRUE")) {
+					statement.setString(1, applicationName);
+					try (ResultSet resultSet = statement.executeQuery()) {
+						while (resultSet.next()) {
+							scripts.add(new ScriptMeta(resultSet.getString(1), resultSet.getLong(2), resultSet.getString(3),
+									resultSet.getString(4), resultSet.getString(5), resultSet.getString(6)));
+						}
 					}
 				}
+				manifest.setChains(chains);
+				manifest.setScripts(scripts);
+				manifest.setLatestSeq(latestSeq(connection));
+				connection.commit();
 			}
-			manifest.setChains(chains);
-			manifest.setScripts(scripts);
-			manifest.setLatestSeq(latestSeq(connection));
-			connection.commit();
+			finally { restoreConnectionState(connection, previousIsolation, previousAutoCommit); }
 		}
 		catch (SQLException e) { throw wrap("fetchManifest", e); }
 		return manifest;
@@ -216,5 +221,14 @@ public final class PostgresqlRuleRepository implements RuleRepository {
 
 	private RuntimeException wrap(String operation, SQLException e) {
 		return new RuntimeException("rule-db postgresql " + operation + " failed: " + e.getMessage(), e);
+	}
+
+	/** Returns a borrowed pooled connection with the state it had before this borrow. */
+	private void restoreConnectionState(Connection connection, int isolation, boolean autoCommit) {
+		// End the transaction first: PostgreSQL rejects isolation changes mid-transaction.
+		try { connection.setAutoCommit(autoCommit); }
+		catch (SQLException ignored) { }
+		try { connection.setTransactionIsolation(isolation); }
+		catch (SQLException ignored) { }
 	}
 }

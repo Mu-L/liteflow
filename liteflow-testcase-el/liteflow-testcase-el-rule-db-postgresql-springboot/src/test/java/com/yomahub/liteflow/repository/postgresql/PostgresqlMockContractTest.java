@@ -18,6 +18,7 @@ import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Savepoint;
+import java.sql.Statement;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -199,6 +200,10 @@ class PostgresqlMockContractTest {
 		Connection connection = mock(Connection.class);
 		when(dataSource.getConnection()).thenReturn(connection);
 		when(connection.setSavepoint()).thenReturn(mock(Savepoint.class));
+		Statement lock = mock(Statement.class);
+		ResultSet lockRow = sequence(1L);
+		when(connection.createStatement()).thenReturn(lock);
+		when(lock.executeQuery(anyString())).thenReturn(lockRow);
 		return connection;
 	}
 

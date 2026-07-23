@@ -209,7 +209,7 @@ class RedisMockContractTest {
 			this.failure = failure;
 		}
 		@Override public long fetchLatestSeq() { return latest; }
-		@Override public List<ChangeRecord> fetchChangesSince(long seq) {
+		@Override public List<ChangeRecord> fetchChangesSince(long seq, int limit) {
 			if (failure != null) { throw failure; }
 			return changes;
 		}

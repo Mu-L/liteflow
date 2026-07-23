@@ -2,6 +2,7 @@ package com.yomahub.liteflow.repository.etcd;
 
 import io.etcd.jetcd.ByteSequence;
 import io.etcd.jetcd.Watch;
+import io.etcd.jetcd.common.exception.CompactedException;
 import io.etcd.jetcd.options.WatchOption;
 import io.etcd.jetcd.watch.WatchEvent;
 import io.etcd.jetcd.watch.WatchResponse;
@@ -60,9 +61,18 @@ final class JetcdWatchFacade implements EtcdWatchFacade {
 			option.withRevision(startRevision);
 		}
 		Watch.Watcher watcher = watch.watch(key, option.build(), Watch.listener(
-				response -> listener.onEvents(events(response)), listener::onError,
+				response -> listener.onEvents(events(response)), error -> listener.onError(classify(error)),
 				() -> listener.onError(null)));
 		return watcher::close;
+	}
+
+	private static Throwable classify(Throwable error) {
+		for (Throwable cause = error; cause != null; cause = cause.getCause()) {
+			if (cause instanceof CompactedException) {
+				return new EtcdCompactionException(error);
+			}
+		}
+		return error;
 	}
 
 	private List<Event> events(WatchResponse response) {

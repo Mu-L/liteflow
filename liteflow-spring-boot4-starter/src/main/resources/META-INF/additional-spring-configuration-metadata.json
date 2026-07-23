@@ -735,6 +735,12 @@
       "defaultValue": "lf"
     },
     {
+      "name": "liteflow.rule-db.redis.key-hash-tag",
+      "type": "java.lang.String",
+      "description": "Redis Cluster hash-tag pinning all rule keys to one slot. Required in cluster mode.",
+      "sourceType": "com.yomahub.liteflow.property.RuleDbRedisConfig"
+    },
+    {
       "name": "liteflow.rule-db.redis.redisson-bean-name",
       "type": "java.lang.String",
       "description": "Redisson bean name. Blank means lookup by type.",
@@ -766,6 +772,64 @@
       "defaultValue": "/liteflow"
     },
     {
+      "name": "liteflow.rule-db.etcd.ca-certificate",
+      "type": "java.lang.String",
+      "description": "CA certificate file path for etcd TLS. Requires https endpoints.",
+      "sourceType": "com.yomahub.liteflow.property.RuleDbEtcdConfig"
+    },
+    {
+      "name": "liteflow.rule-db.etcd.client-certificate",
+      "type": "java.lang.String",
+      "description": "Client certificate file path for etcd mTLS. Must be configured together with client-key.",
+      "sourceType": "com.yomahub.liteflow.property.RuleDbEtcdConfig"
+    },
+    {
+      "name": "liteflow.rule-db.etcd.client-key",
+      "type": "java.lang.String",
+      "description": "Client private key file path for etcd mTLS. Must be configured together with client-certificate.",
+      "sourceType": "com.yomahub.liteflow.property.RuleDbEtcdConfig"
+    },
+    {
+      "name": "liteflow.rule-db.etcd.authority",
+      "type": "java.lang.String",
+      "description": "gRPC authority override for etcd connections.",
+      "sourceType": "com.yomahub.liteflow.property.RuleDbEtcdConfig"
+    },
+    {
+      "name": "liteflow.rule-db.etcd.connect-timeout-millis",
+      "type": "java.lang.Long",
+      "description": "etcd connect timeout in milliseconds.",
+      "sourceType": "com.yomahub.liteflow.property.RuleDbEtcdConfig",
+      "defaultValue": 5000
+    },
+    {
+      "name": "liteflow.rule-db.etcd.keepalive-time-seconds",
+      "type": "java.lang.Long",
+      "description": "gRPC keepalive interval in seconds.",
+      "sourceType": "com.yomahub.liteflow.property.RuleDbEtcdConfig",
+      "defaultValue": 30
+    },
+    {
+      "name": "liteflow.rule-db.etcd.keepalive-timeout-seconds",
+      "type": "java.lang.Long",
+      "description": "gRPC keepalive timeout in seconds.",
+      "sourceType": "com.yomahub.liteflow.property.RuleDbEtcdConfig",
+      "defaultValue": 10
+    },
+    {
+      "name": "liteflow.rule-db.etcd.keepalive-without-calls",
+      "type": "java.lang.Boolean",
+      "description": "Whether to send keepalive pings when there are no active calls.",
+      "sourceType": "com.yomahub.liteflow.property.RuleDbEtcdConfig",
+      "defaultValue": true
+    },
+    {
+      "name": "liteflow.rule-db.etcd.client-bean-name",
+      "type": "java.lang.String",
+      "description": "Name of an existing io.etcd.jetcd.Client bean to reuse.",
+      "sourceType": "com.yomahub.liteflow.property.RuleDbEtcdConfig"
+    },
+    {
       "name": "liteflow.rule-db.zk.connect-string",
       "type": "java.lang.String",
       "description": "ZooKeeper connection string.",
@@ -783,6 +847,24 @@
       "description": "Root path for Rule-DB data in ZooKeeper.",
       "sourceType": "com.yomahub.liteflow.property.RuleDbZkConfig",
       "defaultValue": "/liteflow"
+    },
+    {
+      "name": "liteflow.rule-db.zk.username",
+      "type": "java.lang.String",
+      "description": "ZooKeeper digest auth username. Must be configured together with password.",
+      "sourceType": "com.yomahub.liteflow.property.RuleDbZkConfig"
+    },
+    {
+      "name": "liteflow.rule-db.zk.password",
+      "type": "java.lang.String",
+      "description": "ZooKeeper digest auth password. Must be configured together with username.",
+      "sourceType": "com.yomahub.liteflow.property.RuleDbZkConfig"
+    },
+    {
+      "name": "liteflow.rule-db.zk.curator-bean-name",
+      "type": "java.lang.String",
+      "description": "Name of an existing CuratorFramework bean to reuse.",
+      "sourceType": "com.yomahub.liteflow.property.RuleDbZkConfig"
     },
     {
       "name": "liteflow.metrics.enabled",

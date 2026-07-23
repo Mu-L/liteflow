@@ -4,12 +4,18 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$repo_root"
 
+require_passing_report() {
+  local report="$1"
+  test -f "$report"
+  grep -Eq 'Tests run: [1-9][0-9]*, Failures: 0, Errors: 0, Skipped: 0' "$report"
+}
+
 mvn -pl liteflow-testcase-el/liteflow-testcase-el-rule-db-sql-springboot \
   -am clean verify -DskipTests=false -Dmaven.test.skip=false
 
-report="liteflow-testcase-el/liteflow-testcase-el-rule-db-sql-springboot/target/surefire-reports/com.yomahub.liteflow.repository.sql.SqlPollingResilienceTest.txt"
-test -f "$report"
-grep -Eq 'Tests run: [1-9][0-9]*, Failures: 0, Errors: 0, Skipped: 0' "$report"
+reports="liteflow-testcase-el/liteflow-testcase-el-rule-db-sql-springboot/target/surefire-reports"
+require_passing_report "$reports/com.yomahub.liteflow.repository.sql.SqlPollingResilienceTest.txt"
+require_passing_report "$reports/com.yomahub.liteflow.repository.sql.SqlContainerIntegrationTest.txt"
 
 command -v jq >/dev/null
 jq -e . liteflow-spring-boot-starter/src/main/resources/META-INF/additional-spring-configuration-metadata.json >/dev/null

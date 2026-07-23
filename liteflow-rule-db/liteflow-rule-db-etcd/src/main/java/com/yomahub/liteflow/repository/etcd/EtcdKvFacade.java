@@ -25,6 +25,12 @@ interface EtcdKvFacade {
 
 	Range range(String prefix);
 
+	/**
+	 * Range-read pinned to a store revision so a manifest can be assembled
+	 * from a consistent snapshot across multiple prefixes.
+	 */
+	Range range(String prefix, long revision);
+
 	TxnResult putPair(String metadataKey, long expectedModRevision,
 			String contentKey, String content, String metadata);
 
@@ -110,13 +116,20 @@ final class JetcdKvFacade implements EtcdKvFacade {
 
 	@Override
 	public Range range(String prefix) {
+		return range(prefix, 0);
+	}
+
+	@Override
+	public Range range(String prefix, long revision) {
 		ByteSequence key = bytes(prefix);
-		GetOption option = GetOption.newBuilder()
+		GetOption.Builder option = GetOption.newBuilder()
 				.withPrefix(key)
 				.withSortField(GetOption.SortTarget.KEY)
-				.withSortOrder(GetOption.SortOrder.ASCEND)
-				.build();
-		GetResponse response = await(kv.get(key, option), "range " + prefix);
+				.withSortOrder(GetOption.SortOrder.ASCEND);
+		if (revision > 0) {
+			option.withRevision(revision);
+		}
+		GetResponse response = await(kv.get(key, option.build()), "range " + prefix);
 		List<Entry> entries = new ArrayList<>();
 		for (KeyValue value : response.getKvs()) {
 			entries.add(new Entry(text(value.getKey()), text(value.getValue()), value.getModRevision()));

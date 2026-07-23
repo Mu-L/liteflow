@@ -36,3 +36,8 @@ CREATE TABLE IF NOT EXISTS `${prefix}change_log` (
   PRIMARY KEY (`seq`),
   KEY `idx_app_seq` (`application_name`, `seq`)
 ) DEFAULT CHARACTER SET utf8mb4;
+CREATE TABLE IF NOT EXISTS `${prefix}change_lock` (
+  `lock_id` TINYINT NOT NULL,
+  PRIMARY KEY (`lock_id`)
+) DEFAULT CHARACTER SET utf8mb4;
+INSERT IGNORE INTO `${prefix}change_lock` (`lock_id`) VALUES (1);

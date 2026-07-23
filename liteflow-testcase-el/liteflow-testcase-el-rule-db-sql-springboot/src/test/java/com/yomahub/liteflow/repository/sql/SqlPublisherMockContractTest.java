@@ -167,6 +167,10 @@ class SqlPublisherMockContractTest {
 		Connection connection = mock(Connection.class);
 		when(dataSource.getConnection()).thenReturn(connection);
 		when(connection.setSavepoint()).thenReturn(mock(Savepoint.class));
+		Statement lock = mock(Statement.class);
+		ResultSet lockRow = sequence(1L);
+		when(connection.createStatement()).thenReturn(lock);
+		when(lock.executeQuery(anyString())).thenReturn(lockRow);
 		return connection;
 	}
 

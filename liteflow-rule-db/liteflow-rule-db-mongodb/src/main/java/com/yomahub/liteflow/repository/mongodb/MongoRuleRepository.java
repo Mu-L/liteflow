@@ -1,6 +1,7 @@
 package com.yomahub.liteflow.repository.mongodb;
 
 import com.mongodb.ClientSessionOptions;
+import com.mongodb.MongoException;
 import com.mongodb.ReadConcern;
 import com.mongodb.ReadPreference;
 import com.mongodb.TransactionOptions;
@@ -11,6 +12,9 @@ import com.mongodb.client.MongoCollection;
 import com.mongodb.client.MongoDatabase;
 import com.yomahub.liteflow.exception.ConfigErrorException;
 import com.yomahub.liteflow.exception.SeqGapException;
+import com.yomahub.liteflow.log.LFLog;
+import com.yomahub.liteflow.log.LFLoggerManager;
+import com.yomahub.liteflow.publisher.exception.RuleStorageException;
 import com.yomahub.liteflow.repository.RuleRepository;
 import com.yomahub.liteflow.repository.vo.ChainMeta;
 import com.yomahub.liteflow.repository.vo.ChainRecord;
@@ -32,6 +36,8 @@ import static com.mongodb.client.model.Sorts.ascending;
 /** MongoDB authoritative repository using projected manifest reads. */
 public final class MongoRuleRepository implements RuleRepository {
 
+	private static final LFLog LOG = LFLoggerManager.getLogger(MongoRuleRepository.class);
+
 	private static final TransactionOptions SNAPSHOT_OPTIONS = TransactionOptions.builder()
 			.readConcern(ReadConcern.SNAPSHOT).readPreference(ReadPreference.primary())
 			.writeConcern(WriteConcern.MAJORITY).build();
@@ -51,7 +57,16 @@ public final class MongoRuleRepository implements RuleRepository {
 	@Override
 	public RuleManifest fetchManifest() {
 		try (ClientSession session = client.startSession(ClientSessionOptions.builder().causallyConsistent(true).build())) {
-			return session.withTransaction(() -> readManifest(session), SNAPSHOT_OPTIONS);
+			try {
+				return session.withTransaction(() -> readManifest(session), SNAPSHOT_OPTIONS);
+			}
+			catch (MongoException e) {
+				if (MongoErrors.isTransactionUnsupported(e)) {
+					throw new RuleStorageException("MongoDB fetch manifest failed: " + e.getMessage()
+							+ MongoErrors.REPLICA_SET_HINT, e);
+				}
+				throw e;
+			}
 		}
 	}
 
@@ -175,6 +190,8 @@ public final class MongoRuleRepository implements RuleRepository {
 
 	private static long number(Document document, String key) {
 		Object value = document.get(key);
-		return value instanceof Number ? ((Number) value).longValue() : 0;
+		if (value instanceof Number) { return ((Number) value).longValue(); }
+		LOG.debug("rule-db mongodb field[{}] is missing or not numeric, defaulting to 0", key);
+		return 0;
 	}
 }

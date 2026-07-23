@@ -7,6 +7,7 @@ import com.yomahub.liteflow.publisher.PublishScriptRequest;
 import com.yomahub.liteflow.publisher.RemoveRuleRequest;
 import com.yomahub.liteflow.publisher.RulePublisher;
 import com.yomahub.liteflow.publisher.exception.RuleStorageException;
+import com.yomahub.liteflow.publisher.exception.RuleValidationException;
 import com.yomahub.liteflow.publisher.exception.VersionConflictException;
 import com.yomahub.liteflow.repository.vo.ChainRecord;
 import com.yomahub.liteflow.repository.vo.ChangeRecord;
@@ -25,6 +26,9 @@ final class ZkRulePublisher implements RulePublisher {
 
 	private static final int MAX_UNCONDITIONAL_RETRIES = 8;
 
+	/** Safety margin below the ZooKeeper 1MB jute.maxbuffer znode limit. */
+	private static final int MAX_ZNODE_BYTES = 960 * 1024;
+
 	private final ZkConnectionManager connection;
 	private final CuratorFramework client;
 	private final ZkPaths paths;
@@ -32,10 +36,16 @@ final class ZkRulePublisher implements RulePublisher {
 
 	ZkRulePublisher(ZkPublisherConfig config) {
 		this.connection = new ZkConnectionManager(config);
-		this.client = connection.client();
-		this.paths = new ZkPaths(config.getRootPath(), config.applicationName());
-		this.codec = new ZkRecordCodec();
-		ensureRoots();
+		try {
+			this.client = connection.client();
+			this.paths = new ZkPaths(config.getRootPath(), config.applicationName());
+			this.codec = new ZkRecordCodec();
+			ensureRoots();
+		}
+		catch (RuntimeException e) {
+			connection.close();
+			throw e;
+		}
 	}
 
 	ZkRulePublisher(CuratorFramework client, ZkPaths paths, ZkRecordCodec codec) {
@@ -104,6 +114,7 @@ final class ZkRulePublisher implements RulePublisher {
 			if (expected != null && expected != currentVersion) { throw conflict(type, id, expected, currentVersion); }
 			long nextVersion = currentVersion + 1;
 			Encoded encoded = encoder.encode(nextVersion);
+			ensureWithinLimit(type, id, encoded);
 			try {
 				List<CuratorOp> operations = new ArrayList<>();
 				if (metadata == null) {
@@ -172,6 +183,15 @@ final class ZkRulePublisher implements RulePublisher {
 			client.createContainers(paths.scriptContentRoot());
 		}
 		catch (Exception e) { throw storage("create rule roots", e); }
+	}
+
+	private void ensureWithinLimit(ChangeRecord.TargetType type, String id, Encoded encoded) {
+		int size = Math.max(encoded.metadata.length, encoded.content.length);
+		if (size > MAX_ZNODE_BYTES) {
+			throw new RuleValidationException("ZooKeeper " + type.name().toLowerCase() + "[" + id
+					+ "] encoded size " + size + " bytes exceeds the " + MAX_ZNODE_BYTES
+					+ " byte safety limit (ZooKeeper jute.maxbuffer defaults to 1MB)");
+		}
 	}
 
 	private Data get(String path) {

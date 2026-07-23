@@ -23,6 +23,9 @@ public final class EtcdRulePublisherProvider implements RulePublisherProvider {
 		if (etcd.getClient() == null && StrUtil.isBlank(etcd.getEndpoints())) {
 			throw new PublisherConfigurationException("etcd publisher requires a Client or endpoints");
 		}
+		if (StrUtil.isBlank(etcd.applicationName())) {
+			throw new PublisherConfigurationException("etcd publisher applicationName must not be blank");
+		}
 		if (StrUtil.isBlank(etcd.getRootPath())) {
 			throw new PublisherConfigurationException("etcd publisher rootPath must not be blank");
 		}

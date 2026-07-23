@@ -2,8 +2,6 @@ package com.yomahub.liteflow.repository.redis;
 
 import cn.hutool.core.util.StrUtil;
 import com.yomahub.liteflow.exception.ConfigErrorException;
-import com.yomahub.liteflow.property.LiteflowConfigGetter;
-import com.yomahub.liteflow.property.RuleDbConfig;
 import com.yomahub.liteflow.property.RuleDbRedisConfig;
 import com.yomahub.liteflow.spi.holder.ContextAwareHolder;
 import org.redisson.Redisson;
@@ -18,28 +16,22 @@ public class RedisConnectionManager {
 
 	private final RuleDbRedisConfig executionConfig;
 	private final RedisPublisherConfig publisherConfig;
-	private final boolean dynamicExecutionConfig;
 
 	private volatile RedissonClient client;
 	private volatile boolean selfCreated;
 
-	public RedisConnectionManager() {
-		this.executionConfig = null;
-		this.publisherConfig = null;
-		this.dynamicExecutionConfig = true;
-	}
-
 	RedisConnectionManager(RuleDbRedisConfig config) {
 		this.executionConfig = config;
 		this.publisherConfig = null;
-		this.dynamicExecutionConfig = false;
 	}
 
 	RedisConnectionManager(RedisPublisherConfig config) {
 		this.executionConfig = null;
 		this.publisherConfig = config;
-		this.dynamicExecutionConfig = false;
-		this.client = config.getRedissonClient();
+		if (config.getRedissonClient() != null) {
+			validateBorrowedClient(config.getRedissonClient());
+			this.client = config.getRedissonClient();
+		}
 	}
 
 	public RedissonClient getClient() {
@@ -52,6 +44,7 @@ public class RedisConnectionManager {
 			}
 			RedissonClient bean = publisherConfig == null ? lookupBean(execution()) : null;
 			if (bean != null) {
+				validateBorrowedClient(bean);
 				client = bean;
 				return client;
 			}
@@ -85,11 +78,11 @@ public class RedisConnectionManager {
 		}
 	}
 
-	private Config buildConfig() {
+	Config buildConfig() {
 		Config config = new Config();
 		String[] addresses = address().split(",");
 		int database = database() == null ? 0 : database();
-		if (addresses.length > 1 && StrUtil.isNotBlank(masterName())) {
+		if (StrUtil.isNotBlank(masterName())) {
 			SentinelServersConfig sentinel = config.useSentinelServers()
 					.setMasterName(masterName())
 					.setDatabase(database);
@@ -98,12 +91,12 @@ public class RedisConnectionManager {
 			}
 			applyCredentials(sentinel);
 		}
-			else if (addresses.length > 1) {
-				if (StrUtil.isBlank(keyHashTag())) {
-					throw new ConfigErrorException(
-							"rule-db redis key-hash-tag is required for Redis Cluster atomic operations");
-				}
-				ClusterServersConfig cluster = config.useClusterServers();
+		else if (addresses.length > 1) {
+			if (StrUtil.isBlank(keyHashTag())) {
+				throw new ConfigErrorException(
+						"rule-db redis key-hash-tag is required for Redis Cluster atomic operations");
+			}
+			ClusterServersConfig cluster = config.useClusterServers();
 			for (String item : addresses) {
 				cluster.addNodeAddress(normalize(item));
 			}
@@ -116,6 +109,20 @@ public class RedisConnectionManager {
 			applyCredentials(single);
 		}
 		return config;
+	}
+
+	private void validateBorrowedClient(RedissonClient borrowed) {
+		Config config;
+		try {
+			config = borrowed.getConfig();
+		}
+		catch (RuntimeException e) {
+			return;
+		}
+		if (config != null && config.isClusterConfig() && StrUtil.isBlank(keyHashTag())) {
+			throw new ConfigErrorException(
+					"rule-db redis key-hash-tag is required for Redis Cluster atomic operations");
+		}
 	}
 
 	private void applyCredentials(SentinelServersConfig config) {
@@ -170,11 +177,7 @@ public class RedisConnectionManager {
 	}
 
 	private RuleDbRedisConfig execution() {
-		if (!dynamicExecutionConfig) {
-			return executionConfig;
-		}
-		RuleDbConfig config = LiteflowConfigGetter.get().getRuleDb();
-		return config == null || config.getRedis() == null ? new RuleDbRedisConfig() : config.getRedis();
+		return executionConfig;
 	}
 
 	private String normalize(String address) {

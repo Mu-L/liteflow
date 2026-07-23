@@ -303,6 +303,16 @@ final class SqlRulePublisherImpl implements RulePublisher {
 		throw new SQLException("change log insert did not return a generated sequence");
 	}
 
+	private void lockPublishingOrder(Connection connection) throws SQLException {
+		String sql = "SELECT lock_id FROM " + dialect.changeLockTable() + " WHERE lock_id = 1 FOR UPDATE";
+		try (Statement statement = connection.createStatement();
+				ResultSet resultSet = statement.executeQuery(sql)) {
+			if (!resultSet.next()) {
+				throw new SQLException("publishing order lock row is missing; migrate the rule-db SQL schema");
+			}
+		}
+	}
+
 	private PublishResult result(String targetId, ChangeRecord.TargetType targetType,
 			ChangeRecord.Op operation, long version, long sequence) {
 		return PublishResult.builder()
@@ -315,6 +325,12 @@ final class SqlRulePublisherImpl implements RulePublisher {
 	}
 
 	private VersionConflictException conflict(String targetType, String targetId, long expected, long current) {
+		if (current == 0) {
+			// Versions start at 1 and increase monotonically, so current == 0 means the target row
+			// does not exist; report it distinctly from a version mismatch.
+			return new VersionConflictException(targetType + "[" + targetId + "] does not exist"
+					+ " (expected version[" + expected + "])");
+		}
 		return new VersionConflictException(targetType + "[" + targetId + "] expected version["
 				+ expected + "] but current version is[" + current + "]");
 	}
@@ -325,8 +341,13 @@ final class SqlRulePublisherImpl implements RulePublisher {
 
 	private PublishResult inTransaction(String operation, SqlWork work) {
 		try (Connection connection = connectionManager.getConnection()) {
+			// The connection may come from a pool; restore its original autoCommit before returning it.
+			boolean originalAutoCommit = connection.getAutoCommit();
 			connection.setAutoCommit(false);
 			try {
+				// The row lock is held through commit, so generated change-log sequences are
+				// allocated in the same order in which publication transactions can commit.
+				lockPublishingOrder(connection);
 				PublishResult result = work.execute(connection);
 				connection.commit();
 				return result;
@@ -338,6 +359,9 @@ final class SqlRulePublisherImpl implements RulePublisher {
 				}
 				throw new RuleStorageException("SQL " + operation + " failed: " + e.getMessage(), e);
 			}
+			finally {
+				restoreAutoCommitQuietly(connection, originalAutoCommit);
+			}
 		}
 		catch (SQLException e) {
 			throw new RuleStorageException("SQL " + operation + " failed: " + e.getMessage(), e);
@@ -347,6 +371,14 @@ final class SqlRulePublisherImpl implements RulePublisher {
 	private void rollbackQuietly(Connection connection) {
 		try {
 			connection.rollback();
+		}
+		catch (SQLException ignored) {
+		}
+	}
+
+	private void restoreAutoCommitQuietly(Connection connection, boolean autoCommit) {
+		try {
+			connection.setAutoCommit(autoCommit);
 		}
 		catch (SQLException ignored) {
 		}

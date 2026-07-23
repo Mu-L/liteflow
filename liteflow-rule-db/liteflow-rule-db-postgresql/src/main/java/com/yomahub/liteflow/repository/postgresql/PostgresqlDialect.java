@@ -24,6 +24,7 @@ final class PostgresqlDialect {
 	String chainTable() { return prefix + "chain"; }
 	String scriptTable() { return prefix + "script"; }
 	String changeLogTable() { return prefix + "change_log"; }
+	String changeLockTable() { return prefix + "change_lock"; }
 
 	String ddlText(Connection connection) {
 		assertPostgresql(connection);

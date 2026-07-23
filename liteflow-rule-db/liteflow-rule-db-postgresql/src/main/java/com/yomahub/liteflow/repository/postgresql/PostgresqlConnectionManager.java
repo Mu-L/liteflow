@@ -17,6 +17,7 @@ final class PostgresqlConnectionManager {
 	private final PostgresqlPublisherConfig publisherConfig;
 	private volatile DataSource dataSource;
 	private volatile boolean resolved;
+	private volatile boolean driverLoaded;
 
 	PostgresqlConnectionManager(RuleDbPostgresqlConfig config) {
 		this.executionConfig = config;
@@ -44,7 +45,12 @@ final class PostgresqlConnectionManager {
 		if (resolved) { return dataSource; }
 		synchronized (this) {
 			if (resolved) { return dataSource; }
-			if (StrUtil.isBlank(url())) { dataSource = lookupDataSourceBean(executionConfig.getDatasourceBeanName()); }
+			if (StrUtil.isBlank(url())) {
+				DataSource candidate = lookupDataSourceBean(executionConfig.getDatasourceBeanName());
+				// A failed lookup is not cached: the bean may appear later, so retry next time.
+				if (candidate == null) { return null; }
+				dataSource = candidate;
+			}
 			resolved = true;
 			return dataSource;
 		}
@@ -59,12 +65,14 @@ final class PostgresqlConnectionManager {
 	}
 
 	private void loadDriver() {
+		if (driverLoaded) { return; }
 		String driver = publisherConfig == null ? executionConfig.getDriverClassName() : publisherConfig.getDriverClassName();
 		if (StrUtil.isBlank(driver)) { driver = "org.postgresql.Driver"; }
 		try { Class.forName(driver); }
 		catch (ClassNotFoundException e) {
 			throw new ConfigErrorException("rule-db postgresql: driver class not found: " + driver);
 		}
+		driverLoaded = true;
 	}
 
 	private String url() { return publisherConfig == null ? executionConfig.getUrl() : publisherConfig.getUrl(); }

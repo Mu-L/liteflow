@@ -33,6 +33,7 @@ final class RedisRulePublisherImpl implements RulePublisher {
 
 	@Override
 	public PublishResult publishChain(PublishChainRequest request) {
+		RedisStorageValidator.validateChainRequest(request);
 		return execute("publish chain", request.getChainId(), ChangeRecord.TargetType.CHAIN,
 				ChangeRecord.Op.UPSERT, publishChainLua,
 				Arrays.asList(keys.chain(request.getChainId()), keys.chainIds(), keys.seq(), keys.changelog()),
@@ -43,6 +44,7 @@ final class RedisRulePublisherImpl implements RulePublisher {
 
 	@Override
 	public PublishResult publishScript(PublishScriptRequest request) {
+		RedisStorageValidator.validateScriptRequest(request);
 		return execute("publish script", request.getNodeId(), ChangeRecord.TargetType.SCRIPT,
 				ChangeRecord.Op.UPSERT, publishScriptLua,
 				Arrays.asList(keys.script(request.getNodeId()), keys.scriptIds(), keys.seq(), keys.changelog()),
@@ -53,11 +55,13 @@ final class RedisRulePublisherImpl implements RulePublisher {
 
 	@Override
 	public PublishResult removeChain(RemoveRuleRequest request) {
+		RedisStorageValidator.validateRemoveRequest(request);
 		return remove(request, ChangeRecord.TargetType.CHAIN, keys.chain(request.getTargetId()), keys.chainIds());
 	}
 
 	@Override
 	public PublishResult removeScript(RemoveRuleRequest request) {
+		RedisStorageValidator.validateRemoveRequest(request);
 		return remove(request, ChangeRecord.TargetType.SCRIPT, keys.script(request.getTargetId()), keys.scriptIds());
 	}
 

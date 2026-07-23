@@ -33,6 +33,8 @@ public class SqlRulePublisher {
 		SqlStorageValidator.validateLegacyChain(chainId, el);
 		String md5 = SecureUtil.md5(el);
 		try (Connection c = connectionManager.getConnection()) {
+			// 连接可能借自连接池，归还前在 finally 中恢复 autoCommit，避免污染下一个借用者
+			boolean originalAutoCommit = c.getAutoCommit();
 			c.setAutoCommit(false);
 			try {
 				long version = upsertChain(c, chainId, el, md5);
@@ -42,6 +44,11 @@ public class SqlRulePublisher {
 			} catch (SQLException e) {
 				c.rollback();
 				throw e;
+			} catch (RuntimeException e) {
+				rollbackQuietly(c);
+				throw e;
+			} finally {
+				restoreAutoCommitQuietly(c, originalAutoCommit);
 			}
 		} catch (SQLException e) {
 			throw new RuntimeException("publishChain failed: " + e.getMessage(), e);
@@ -52,6 +59,8 @@ public class SqlRulePublisher {
 		SqlStorageValidator.validateLegacyScript(s);
 		String md5 = SecureUtil.md5(s.getScript());
 		try (Connection c = connectionManager.getConnection()) {
+			// 连接可能借自连接池，归还前在 finally 中恢复 autoCommit，避免污染下一个借用者
+			boolean originalAutoCommit = c.getAutoCommit();
 			c.setAutoCommit(false);
 			try {
 				long version = upsertScript(c, s, md5);
@@ -61,6 +70,11 @@ public class SqlRulePublisher {
 			} catch (SQLException e) {
 				c.rollback();
 				throw e;
+			} catch (RuntimeException e) {
+				rollbackQuietly(c);
+				throw e;
+			} finally {
+				restoreAutoCommitQuietly(c, originalAutoCommit);
 			}
 		} catch (SQLException e) {
 			throw new RuntimeException("publishScript failed: " + e.getMessage(), e);
@@ -70,6 +84,8 @@ public class SqlRulePublisher {
 	public void removeChain(String chainId) {
 		SqlStorageValidator.validateTargetId("chainId", chainId);
 		try (Connection c = connectionManager.getConnection()) {
+			// 连接可能借自连接池，归还前在 finally 中恢复 autoCommit，避免污染下一个借用者
+			boolean originalAutoCommit = c.getAutoCommit();
 			c.setAutoCommit(false);
 			try {
 				long version = currentChainVersion(c, chainId);
@@ -84,6 +100,11 @@ public class SqlRulePublisher {
 			} catch (SQLException e) {
 				c.rollback();
 				throw e;
+			} catch (RuntimeException e) {
+				rollbackQuietly(c);
+				throw e;
+			} finally {
+				restoreAutoCommitQuietly(c, originalAutoCommit);
 			}
 		} catch (SQLException e) {
 			throw new RuntimeException("removeChain failed: " + e.getMessage(), e);
@@ -93,6 +114,8 @@ public class SqlRulePublisher {
 	public void removeScript(String nodeId) {
 		SqlStorageValidator.validateTargetId("nodeId", nodeId);
 		try (Connection c = connectionManager.getConnection()) {
+			// 连接可能借自连接池，归还前在 finally 中恢复 autoCommit，避免污染下一个借用者
+			boolean originalAutoCommit = c.getAutoCommit();
 			c.setAutoCommit(false);
 			try {
 				long version = currentScriptVersion(c, nodeId);
@@ -107,6 +130,11 @@ public class SqlRulePublisher {
 			} catch (SQLException e) {
 				c.rollback();
 				throw e;
+			} catch (RuntimeException e) {
+				rollbackQuietly(c);
+				throw e;
+			} finally {
+				restoreAutoCommitQuietly(c, originalAutoCommit);
 			}
 		} catch (SQLException e) {
 			throw new RuntimeException("removeScript failed: " + e.getMessage(), e);
@@ -263,6 +291,22 @@ public class SqlRulePublisher {
 
 	private boolean isConstraintViolation(SQLException e) {
 		return e.getSQLState() != null && e.getSQLState().startsWith("23");
+	}
+
+	/** 静默回滚：连接已损坏时回滚失败无需掩盖原始异常。 */
+	private void rollbackQuietly(Connection c) {
+		try {
+			c.rollback();
+		} catch (SQLException ignored) {
+		}
+	}
+
+	/** 归还（关闭）借出连接前恢复 autoCommit；复位失败说明连接已损坏，静默忽略。 */
+	private void restoreAutoCommitQuietly(Connection c, boolean autoCommit) {
+		try {
+			c.setAutoCommit(autoCommit);
+		} catch (SQLException ignored) {
+		}
 	}
 
 	private void insertChangeLog(Connection c, String targetType, String targetId, String op, long version)

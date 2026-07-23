@@ -11,9 +11,30 @@ final class ZkPaths {
 		if (StrUtil.isBlank(applicationName)) {
 			throw new ConfigErrorException("rule-db zk applicationName must not be blank");
 		}
+		String app = applicationName.trim();
+		validateSegment("applicationName", app);
 		String root = StrUtil.isBlank(rootPath) ? "/liteflow" : rootPath.trim();
 		String normalized = trimSlashes(root);
-		this.base = (normalized.isEmpty() ? "" : "/" + normalized) + "/" + trimSlashes(applicationName.trim());
+		if (!normalized.isEmpty()) {
+			for (String segment : normalized.split("/")) {
+				validateSegment("rootPath", segment);
+			}
+		}
+		this.base = (normalized.isEmpty() ? "" : "/" + normalized) + "/" + app;
+	}
+
+	private static void validateSegment(String field, String segment) {
+		if (segment.isEmpty() || segment.indexOf('/') >= 0 || segment.indexOf("..") >= 0) {
+			throw new ConfigErrorException("rule-db zk " + field
+					+ " contains illegal path segment[" + segment + "]");
+		}
+		for (int i = 0; i < segment.length(); i++) {
+			char c = segment.charAt(i);
+			if (c < 0x20 || c == 0x7f) {
+				throw new ConfigErrorException("rule-db zk " + field
+						+ " contains an illegal control character");
+			}
+		}
 	}
 
 	String chainMetaRoot() { return base + "/chains/meta"; }

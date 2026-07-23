@@ -20,6 +20,9 @@ public final class ZkRulePublisherProvider implements RulePublisherProvider {
 			throw new PublisherConfigurationException("ZooKeeper publisher requires ZkPublisherConfig");
 		}
 		ZkPublisherConfig zk = (ZkPublisherConfig) config;
+		if (StrUtil.isBlank(zk.applicationName())) {
+			throw new PublisherConfigurationException("ZooKeeper publisher applicationName must not be blank");
+		}
 		if (zk.getClient() == null && StrUtil.isBlank(zk.getConnectString())) {
 			throw new PublisherConfigurationException("ZooKeeper publisher requires a CuratorFramework or connectString");
 		}

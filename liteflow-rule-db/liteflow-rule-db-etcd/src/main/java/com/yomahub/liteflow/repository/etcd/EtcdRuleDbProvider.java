@@ -23,12 +23,23 @@ public final class EtcdRuleDbProvider implements RuleDbProvider {
 			applicationName = "default";
 		}
 		this.connection = new EtcdConnectionManager(etcd);
-		EtcdKeys keys = new EtcdKeys(etcd.getRootPath(), applicationName);
-		EtcdRecordCodec codec = new EtcdRecordCodec();
-		this.repository = new EtcdRuleRepository(
-				new JetcdKvFacade(connection.client().getKVClient()), keys, codec);
-		this.changeSource = new EtcdWatchChangeSource(
-				new JetcdWatchFacade(connection.client().getWatchClient()), keys, codec);
+		try {
+			EtcdKeys keys = new EtcdKeys(etcd.getRootPath(), applicationName);
+			EtcdRecordCodec codec = new EtcdRecordCodec();
+			this.repository = new EtcdRuleRepository(
+					new JetcdKvFacade(connection.client().getKVClient()), keys, codec);
+			this.changeSource = new EtcdWatchChangeSource(
+					new JetcdWatchFacade(connection.client().getWatchClient()), keys, codec);
+		}
+		catch (RuntimeException | Error e) {
+			try {
+				connection.close();
+			}
+			catch (RuntimeException closeError) {
+				e.addSuppressed(closeError);
+			}
+			throw e;
+		}
 	}
 
 	@Override
@@ -48,7 +59,11 @@ public final class EtcdRuleDbProvider implements RuleDbProvider {
 
 	@Override
 	public void close() {
-		changeSource.close();
-		connection.close();
+		try {
+			changeSource.close();
+		}
+		finally {
+			connection.close();
+		}
 	}
 }

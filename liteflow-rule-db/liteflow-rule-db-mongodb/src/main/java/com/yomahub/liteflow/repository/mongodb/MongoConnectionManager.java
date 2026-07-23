@@ -5,11 +5,15 @@ import com.mongodb.client.MongoClient;
 import com.mongodb.client.MongoClients;
 import com.mongodb.client.MongoDatabase;
 import com.yomahub.liteflow.exception.ConfigErrorException;
+import com.yomahub.liteflow.log.LFLog;
+import com.yomahub.liteflow.log.LFLoggerManager;
 import com.yomahub.liteflow.property.RuleDbMongoConfig;
 import com.yomahub.liteflow.spi.holder.ContextAwareHolder;
 
 /** Owns or borrows one MongoClient and resolves the configured database. */
 final class MongoConnectionManager implements AutoCloseable {
+
+	private static final LFLog LOG = LFLoggerManager.getLogger(MongoConnectionManager.class);
 
 	private final MongoClient client;
 	private final MongoDatabase database;
@@ -56,6 +60,10 @@ final class MongoConnectionManager implements AutoCloseable {
 			if (StrUtil.isNotBlank(beanName)) { return ContextAwareHolder.loadContextAware().getBean(beanName); }
 			return ContextAwareHolder.loadContextAware().getBean(MongoClient.class);
 		}
-		catch (Exception ignored) { return null; }
+		catch (Exception e) {
+			LOG.debug("rule-db mongodb MongoClient bean lookup failed, falling back to uri configuration: {}",
+					e.toString());
+			return null;
+		}
 	}
 }

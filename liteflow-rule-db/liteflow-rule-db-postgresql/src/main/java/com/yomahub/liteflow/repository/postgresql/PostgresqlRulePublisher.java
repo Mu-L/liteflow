@@ -15,6 +15,7 @@ import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Savepoint;
+import java.sql.Statement;
 
 /** Transactional PostgreSQL implementation of the unified publisher API. */
 final class PostgresqlRulePublisher implements RulePublisher {
@@ -254,18 +255,40 @@ final class PostgresqlRulePublisher implements RulePublisher {
 		throw new SQLException("change log insert did not return a sequence");
 	}
 
+	private void lockPublishingOrder(Connection connection) throws SQLException {
+		String sql = "SELECT lock_id FROM " + dialect.changeLockTable() + " WHERE lock_id = 1 FOR UPDATE";
+		try (Statement statement = connection.createStatement();
+				ResultSet resultSet = statement.executeQuery(sql)) {
+			if (!resultSet.next()) {
+				throw new SQLException("publishing order lock row is missing; migrate the rule-db PostgreSQL schema");
+			}
+		}
+	}
+
 	private PublishResult inTransaction(String operation, Work work) {
 		try (Connection connection = connectionManager.getConnection()) {
+			boolean previousAutoCommit = connection.getAutoCommit();
 			connection.setAutoCommit(false);
 			try {
-				PublishResult result = work.execute(connection);
-				connection.commit();
-				return result;
+				try {
+					// The row lock is held through commit, so generated change-log sequences are
+					// allocated in the same order in which publication transactions can commit.
+					lockPublishingOrder(connection);
+					PublishResult result = work.execute(connection);
+					connection.commit();
+					return result;
+				}
+				catch (RuntimeException | SQLException e) {
+					try { connection.rollback(); } catch (SQLException ignored) { }
+					if (e instanceof RuntimeException) { throw (RuntimeException) e; }
+					throw new RuleStorageException("PostgreSQL " + operation + " failed: " + e.getMessage(), e);
+				}
 			}
-			catch (RuntimeException | SQLException e) {
-				try { connection.rollback(); } catch (SQLException ignored) { }
-				if (e instanceof RuntimeException) { throw (RuntimeException) e; }
-				throw new RuleStorageException("PostgreSQL " + operation + " failed: " + e.getMessage(), e);
+			finally {
+				// Return the borrowed pooled connection with its original auto-commit state.
+				if (previousAutoCommit) {
+					try { connection.setAutoCommit(true); } catch (SQLException ignored) { }
+				}
 			}
 		}
 		catch (SQLException e) {

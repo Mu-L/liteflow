@@ -15,6 +15,7 @@ import java.util.Map;
 import java.util.TreeMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.TimeUnit;
@@ -141,18 +142,16 @@ final class EtcdWatchChangeSource implements RuleChangeSource {
 			return;
 		}
 		int currentGeneration = ++generation;
-		handles.add(watch.watch(keys.chainMetaPrefix(), startRevision,
-				watchListener(currentGeneration, ChangeRecord.TargetType.CHAIN, keys.chainMetaPrefix())));
-		handles.add(watch.watch(keys.scriptMetaPrefix(), startRevision,
-				watchListener(currentGeneration, ChangeRecord.TargetType.SCRIPT, keys.scriptMetaPrefix())));
+		// A single revision-ordered stream prevents one metadata watch from advancing a
+		// shared cursor past an event that the other watch has not observed yet.
+		handles.add(watch.watch(keys.rootPrefix(), startRevision, watchListener(currentGeneration)));
 	}
 
-	private EtcdWatchFacade.Listener watchListener(int expectedGeneration,
-			ChangeRecord.TargetType targetType, String prefix) {
+	private EtcdWatchFacade.Listener watchListener(int expectedGeneration) {
 		return new EtcdWatchFacade.Listener() {
 			@Override
 			public void onEvents(List<EtcdWatchFacade.Event> events) {
-				handleEvents(expectedGeneration, targetType, prefix, events);
+				handleEvents(expectedGeneration, events);
 			}
 
 			@Override
@@ -162,11 +161,23 @@ final class EtcdWatchChangeSource implements RuleChangeSource {
 		};
 	}
 
-	private void handleEvents(int expectedGeneration, ChangeRecord.TargetType targetType,
-			String prefix, List<EtcdWatchFacade.Event> events) {
+	private void handleEvents(int expectedGeneration, List<EtcdWatchFacade.Event> events) {
 		List<ChangeRecord> changes = new ArrayList<>();
 		if (events != null) {
 			for (EtcdWatchFacade.Event event : events) {
+				ChangeRecord.TargetType targetType;
+				String prefix;
+				if (event.key().startsWith(keys.chainMetaPrefix())) {
+					targetType = ChangeRecord.TargetType.CHAIN;
+					prefix = keys.chainMetaPrefix();
+				}
+				else if (event.key().startsWith(keys.scriptMetaPrefix())) {
+					targetType = ChangeRecord.TargetType.SCRIPT;
+					prefix = keys.scriptMetaPrefix();
+				}
+				else {
+					continue;
+				}
 				String id = keys.idFrom(prefix, event.key());
 				ChangeRecord.Op operation = event.delete() || !codec.enabled(event.value())
 						? ChangeRecord.Op.DELETE : ChangeRecord.Op.UPSERT;
@@ -193,7 +204,12 @@ final class EtcdWatchChangeSource implements RuleChangeSource {
 		if (changes == null || changes.isEmpty()) {
 			return;
 		}
-		delivery.execute(() -> deliver(changes));
+		try {
+			delivery.execute(() -> deliver(changes));
+		}
+		catch (RejectedExecutionException ignored) {
+			// close() shut the executor down concurrently; buffered changes die with the source.
+		}
 	}
 
 	private void deliver(List<ChangeRecord> changes) {
@@ -244,7 +260,7 @@ final class EtcdWatchChangeSource implements RuleChangeSource {
 			closeHandlesLocked();
 			String message = error == null ? "etcd watch closed" : String.valueOf(error.getMessage());
 			health = health.degraded(message);
-			compacted = message.toLowerCase().contains("compact");
+			compacted = isCompaction(error);
 			if (compacted) {
 				activeListener = listener;
 			}
@@ -254,8 +270,22 @@ final class EtcdWatchChangeSource implements RuleChangeSource {
 		}
 		if (activeListener != null) {
 			RuleChangeListener callback = activeListener;
-			delivery.execute(callback::onReconcileRequired);
+			try {
+				delivery.execute(callback::onReconcileRequired);
+			}
+			catch (RejectedExecutionException ignored) {
+				// close() shut the executor down concurrently; nothing left to notify.
+			}
 		}
+	}
+
+	private static boolean isCompaction(Throwable error) {
+		for (Throwable cause = error; cause != null; cause = cause.getCause()) {
+			if (cause instanceof EtcdCompactionException) {
+				return true;
+			}
+		}
+		return false;
 	}
 
 	private void scheduleRetryLocked() {

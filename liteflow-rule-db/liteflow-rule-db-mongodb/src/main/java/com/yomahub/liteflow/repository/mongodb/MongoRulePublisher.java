@@ -14,6 +14,8 @@ import com.mongodb.client.model.FindOneAndUpdateOptions;
 import com.mongodb.client.model.ReturnDocument;
 import com.mongodb.client.result.DeleteResult;
 import com.mongodb.client.result.UpdateResult;
+import com.yomahub.liteflow.log.LFLog;
+import com.yomahub.liteflow.log.LFLoggerManager;
 import com.yomahub.liteflow.publisher.PublishChainRequest;
 import com.yomahub.liteflow.publisher.PublishResult;
 import com.yomahub.liteflow.publisher.PublishScriptRequest;
@@ -34,6 +36,8 @@ import static com.mongodb.client.model.Updates.inc;
 /** MongoDB transaction implementation of the unified publisher API. */
 final class MongoRulePublisher implements RulePublisher {
 
+	private static final LFLog LOG = LFLoggerManager.getLogger(MongoRulePublisher.class);
+
 	private static final int MAX_CONCURRENT_RETRIES = 8;
 	private static final TransactionOptions TRANSACTION_OPTIONS = TransactionOptions.builder()
 			.readConcern(ReadConcern.SNAPSHOT).readPreference(ReadPreference.primary())
@@ -46,10 +50,16 @@ final class MongoRulePublisher implements RulePublisher {
 
 	MongoRulePublisher(MongoPublisherConfig config) {
 		this.connection = new MongoConnectionManager(config);
-		this.database = connection.database();
-		this.names = new MongoCollections(config.getCollectionPrefix());
-		this.applicationName = MongoStorageValidator.applicationNameOrDefault(config.applicationName());
-		MongoSchema.ensureIndexes(database, names);
+		try {
+			this.database = connection.database();
+			this.names = new MongoCollections(config.getCollectionPrefix());
+			this.applicationName = MongoStorageValidator.applicationNameOrDefault(config.applicationName());
+			MongoSchema.ensureIndexes(database, names);
+		}
+		catch (RuntimeException e) {
+			connection.close();
+			throw e;
+		}
 	}
 
 	@Override
@@ -171,17 +181,12 @@ final class MongoRulePublisher implements RulePublisher {
 				}
 			}
 			catch (MongoException e) {
-				String hint = transactionUnsupported(e)
+				String hint = MongoErrors.isTransactionUnsupported(e)
 						? "; MongoDB Rule-DB publishing requires a replica set or sharded cluster" : "";
 				throw new RuleStorageException("MongoDB " + operation + " failed: " + e.getMessage() + hint, e);
 			}
 		}
 		throw new RuleStorageException("MongoDB " + operation + " failed");
-	}
-
-	private boolean transactionUnsupported(MongoException e) {
-		String message = e.getMessage();
-		return e.getCode() == 20 || (message != null && message.toLowerCase().contains("transaction numbers"));
 	}
 
 	private boolean isDuplicateKey(MongoWriteException e) { return e.getError().getCode() == 11000; }
@@ -193,7 +198,9 @@ final class MongoRulePublisher implements RulePublisher {
 	private long number(Document document, String key) {
 		if (document == null) { return 0; }
 		Object value = document.get(key);
-		return value instanceof Number ? ((Number) value).longValue() : 0;
+		if (value instanceof Number) { return ((Number) value).longValue(); }
+		LOG.debug("rule-db mongodb field[{}] is missing or not numeric, defaulting to 0", key);
+		return 0;
 	}
 
 	private MongoCollection<Document> chains() { return database.getCollection(names.chains()); }

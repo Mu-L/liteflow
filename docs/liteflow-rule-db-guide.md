@@ -84,7 +84,7 @@ liteflow.rule-db.sql.password=your-password
 # application-name 留空，自动取 spring.application.name
 ```
 
-**姿势 C：建表。** 默认 `auto-init-table=false`，你需要自己在数据库建好三张表（DDL 见参考篇 [§7.1](#71-sql-三张表)），缺表启动会报错并附完整 DDL 可直接复制。如果想偷懒，开一个开关：
+**姿势 C：建表。** 默认 `auto-init-table=false`，你需要自己在数据库建好四张表（DDL 见参考篇 [§7.1](#71-sql-四张表)），缺表启动会报错并附完整 DDL 可直接复制。如果想偷懒，开一个开关：
 
 ```properties
 liteflow.rule-db.sql.auto-init-table=true
@@ -281,6 +281,8 @@ publisher.publishChain(PublishChainRequest.builder()
 
 每次发布在**一个 ZooKeeper 事务**（multi-op）内原子完成 meta 节点 + content 节点的写入；节点 `version`（zxid）作变更序号。zk 连接断线/重连时，watch 自动补订阅并触发一次全量对账。
 
+> **部署顺序与最小权限：** 必须先用 Publisher 账号至少创建一次 Publisher，使其初始化 `{root}/{app}/chains/meta`、`chains/content`、`scripts/meta`、`scripts/content` 四棵路径，再启动执行节点。执行侧 Provider 不创建任何 znode，只校验必要路径并读取／watch；因此执行账号只需要这四棵路径及其子节点的递归 `READ` 权限。Publisher 账号需要创建、更新和删除权限。路径缺失时执行节点会 fail-fast，并提示先用 Publisher 初始化。
+
 ### Step 4：执行
 
 同前，照常 `flowExecutor.execute2Resp(...)`。
@@ -455,6 +457,7 @@ MongoDB 后端使用多文档事务原子发布规则，并使用快照事务读
 | `liteflow.rule-db.redis.password` | — | Redis 口令，可空（配合 `address` 使用）。 |
 | `liteflow.rule-db.redis.database` | `0` | Redis 逻辑库。 |
 | `liteflow.rule-db.redis.key-prefix` | `lf` | 键前缀。规则落在 `{prefix}:{app}:...` 下。 |
+| `liteflow.rule-db.redis.key-hash-tag` | — | Redis Cluster hash-tag（不含花括号）。配置后所有键落在 `{prefix}:{hashTag}:{app}:...` 下、固定到同一 slot，Lua 多键原子发布才能工作。**多地址且无 `master-name`（cluster 模式）时必填**，缺失会在建连时抛 `ConfigErrorException`；单机/哨兵模式可不配。 |
 | `liteflow.rule-db.redis.redisson-bean-name` | 自动查找 | 容器有 `RedissonClient` bean 时复用，不必再配 `address`；此时鉴权在该 bean 上配置。 |
 
 ### ZooKeeper 专属配置（`liteflow-rule-db-zk`）
@@ -464,15 +467,37 @@ MongoDB 后端使用多文档事务原子发布规则，并使用快照事务读
 | `liteflow.rule-db.zk.connect-string` | — | zk 集群地址，多地址逗号分隔。 |
 | `liteflow.rule-db.zk.root-path` | `/liteflow` | 根路径，所有规则节点挂在 `{root}/{app}/...` 下。 |
 | `liteflow.rule-db.zk.session-timeout` | `60000` | 会话超时（毫秒）。 |
+| `liteflow.rule-db.zk.username` | — | digest 认证用户名，可空。配置后模块创建的所有 znode 使用 `CREATOR_ALL_ACL`（仅持有该 digest 身份的连接可写）。与 `password` 必须成对配置，且用户名不允许包含 `:`，否则启动时抛 `ConfigErrorException`。 |
+| `liteflow.rule-db.zk.password` | — | digest 认证口令，与 `username` 成对配置。 |
+| `liteflow.rule-db.zk.curator-bean-name` | — | 复用容器中已有 `CuratorFramework` bean 的名字；配置后 `connect-string` / `session-timeout` / `username` / `password` 不再生效（连接与认证由该 bean 自身配置决定）。bean 不存在时启动抛 `ConfigErrorException`。 |
+
+> **单条规则大小受 zk 单 znode 1MB（`jute.maxbuffer`）限制。** chain EL 或脚本源码的 content znode 超过约 1MB 会被 ZK 服务端拒绝，发布失败；模块会在发布前对编码后内容做大小预检（阈值 960KB），超限抛出 `RuleValidationException`，不会写入 ZK。超大规则请拆分为多条 chain/脚本，或改用 SQL / PostgreSQL / MongoDB 后端。
 
 ### etcd 专属配置（`liteflow-rule-db-etcd`）
 
 | 配置项 | 默认 | 说明 |
 |---|---|---|
-| `liteflow.rule-db.etcd.endpoints` | — | etcd endpoint 列表，逗号分隔。 |
+| `liteflow.rule-db.etcd.endpoints` | — | etcd endpoint 列表，逗号分隔，必须带 `http://` 或 `https://` scheme，不允许混用两种 scheme；格式非法或为空时启动抛 `ConfigErrorException`。 |
 | `liteflow.rule-db.etcd.root-path` | `/liteflow` | 根路径。 |
-| `liteflow.rule-db.etcd.user` | — | 可选，etcd 鉴权用户名。 |
+| `liteflow.rule-db.etcd.user` | — | 可选，etcd 鉴权用户名。与 `password` 必须成对配置。 |
 | `liteflow.rule-db.etcd.password` | — | 可选，etcd 鉴权口令。 |
+| `liteflow.rule-db.etcd.ca-certificate` | — | 可选，CA 证书文件路径（PEM），用于校验 etcd 服务端证书；仅在 endpoints 为 `https://` 时生效，必须是可读文件。 |
+| `liteflow.rule-db.etcd.client-certificate` | — | 可选，客户端证书文件路径（mTLS）；与 `client-key` 必须成对配置，仅在 `https://` endpoints 下生效。 |
+| `liteflow.rule-db.etcd.client-key` | — | 可选，客户端私钥文件路径（mTLS）；与 `client-certificate` 成对配置。 |
+| `liteflow.rule-db.etcd.authority` | — | 可选，gRPC authority 覆盖值（TLS 下用于指定虚拟主机名/证书域名不匹配时的目标名）。 |
+| `liteflow.rule-db.etcd.connect-timeout-millis` | `5000` | 连接超时（毫秒），必须大于 0。 |
+| `liteflow.rule-db.etcd.keepalive-time-seconds` | `30` | gRPC keepalive 探测间隔（秒），必须大于 0。 |
+| `liteflow.rule-db.etcd.keepalive-timeout-seconds` | `10` | keepalive 探测超时（秒），必须大于 0。 |
+| `liteflow.rule-db.etcd.keepalive-without-calls` | `true` | 无活跃调用时是否仍发送 keepalive 探测。 |
+| `liteflow.rule-db.etcd.client-bean-name` | — | 复用容器中已有 `io.etcd.jetcd.Client` bean 的名字；配置后以上连接/认证/TLS 配置均不生效。bean 不存在时启动抛 `ConfigErrorException`。 |
+
+#### TLS / mTLS
+
+etcd 后端的 TLS 由 endpoint scheme 驱动：
+
+- **单向 TLS**：endpoints 全部使用 `https://`，按需配置 `ca-certificate` 指定私有 CA；不配则用 JVM 默认信任库。
+- **双向 TLS（mTLS）**：在单向 TLS 基础上，成对配置 `client-certificate` + `client-key`，供开启了客户端证书校验的 etcd 集群认证。
+- 以下配置错误都会在启动时 fail-fast（`ConfigErrorException`）：http/https endpoint 混用；`user`/`password` 只配一个；`client-certificate`/`client-key` 只配一个；在 `http://` endpoints 下配置任何证书；证书文件不存在或不可读；超时/keepalive 参数 ≤ 0。
 
 ### 与旧配置的关系
 
@@ -485,7 +510,7 @@ MongoDB 后端使用多文档事务原子发布规则，并使用快照事务读
 
 ## 7. 存储结构参考
 
-### 7.1 SQL 三张表
+### 7.1 SQL 四张表
 
 DDL 随 `liteflow-rule-db-sql` 模块提供：[`liteflow-rule-db/liteflow-rule-db-sql/src/main/resources/sql/ddl-mysql.sql`](../liteflow-rule-db/liteflow-rule-db-sql/src/main/resources/sql/ddl-mysql.sql)。表名前缀可配（默认 `lf_`），字段名固定。
 
@@ -520,7 +545,7 @@ DDL 随 `liteflow-rule-db-sql` 模块提供：[`liteflow-rule-db/liteflow-rule-d
 
 | 列 | 说明 |
 |---|---|
-| `seq` | 全局单调递增的变更序号（应用维度） |
+| `seq` | 整张表全局单调递增的变更序号；不同应用共享序号空间，跨应用跳号正常。 |
 | `application_name` | 应用隔离维度 |
 | `target_type` | `CHAIN` / `SCRIPT` |
 | `target_id` | `chainId` / `nodeId` |
@@ -528,11 +553,33 @@ DDL 随 `liteflow-rule-db-sql` 模块提供：[`liteflow-rule-db/liteflow-rule-d
 | `version` | 变更后的版本号 |
 | `gmt_create` | 创建时间 |
 
+**`lf_change_lock`** —— 单行发布顺序锁
+
+| 列 | 说明 |
+|---|---|
+| `lock_id` | 主键；必须存在且仅使用值 `1`。Publisher 在事务内执行 `SELECT ... FOR UPDATE`，并持锁到提交或回滚。 |
+
+该锁把 change log 序号的分配顺序与发布事务的提交顺序对齐，避免并发事务先拿到较小 seq 却后提交，导致轮询节点越过尚未提交的变更。它是整套表的全局锁，不按 `application_name` 拆分。
+
 `change_log` 允许运维定期清理（建议保留 7 天）。节点发现自己的 `lastAppliedSeq` 已小于表中最小 `seq`（断档）时，自动触发一次全量对账，清理不影响正确性。
+
+#### 已有 SQL 部署升级
+
+从没有 `change_lock` 的旧版本升级时，必须在恢复发布流量前执行以下迁移。示例使用默认前缀 `lf_`；自定义 `table-prefix` 时同步替换表名。
+
+```sql
+CREATE TABLE IF NOT EXISTS `lf_change_lock` (
+  `lock_id` TINYINT NOT NULL,
+  PRIMARY KEY (`lock_id`)
+) DEFAULT CHARACTER SET utf8mb4;
+INSERT IGNORE INTO `lf_change_lock` (`lock_id`) VALUES (1);
+```
+
+表存在但 `lock_id = 1` 行缺失同样会使发布失败。不要删除或更新这行数据。
 
 ### 7.2 Redis 键结构
 
-键前缀可配（默认 `lf`），`{app}` 为 `application-name`。所有键都没有显式设置过期——规则的权威源不会被自动清理，删除走 `removeChain` / `removeScript`。
+键前缀可配（默认 `lf`），`{app}` 为 `application-name`。配置了 `key-hash-tag` 时键布局变为 `{prefix}:{hashTag}:{app}:...`（Redis Cluster 必填，见 [§13 限制 3](#13-限制与已知边界)）。所有键都没有显式设置过期——规则的权威源不会被自动清理，删除走 `removeChain` / `removeScript`。
 
 | 键 | 类型 | 内容 |
 |---|---|---|
@@ -581,13 +628,25 @@ DDL 随 `liteflow-rule-db-sql` 模块提供：[`liteflow-rule-db/liteflow-rule-d
 
 变更序号用 etcd 的 **KV revision**。watch 按 revision 区间订阅 meta 前缀。etcd 会定期 compact 历史 revision——一旦节点位点落后到已 compact 的 revision，watch 会报 revision compacted 错误，此时自动降级为一次全量对账后重新从最新 revision 续上 watch。和 zk 一样，etcd 后端没有独立 changelog，不需要清理日志。
 
-### 7.5 PostgreSQL 三张表
+### 7.5 PostgreSQL 四张表
 
-PostgreSQL 使用 `chain`、`script`、`change_log` 三张表，逻辑字段与 SQL 后端一致，但 DDL 使用 `BIGSERIAL`、`BOOLEAN` 和 `TIMESTAMPTZ`。完整 DDL 位于 [`postgresql/ddl.sql`](../liteflow-rule-db/liteflow-rule-db-postgresql/src/main/resources/postgresql/ddl.sql)。Publisher 使用单事务写正文并通过 `INSERT ... RETURNING seq` 取得变更序号。
+PostgreSQL 使用 `chain`、`script`、`change_log`、`change_lock` 四张表，逻辑字段与 SQL 后端一致，但 DDL 使用 `BIGSERIAL`、`BOOLEAN` 和 `TIMESTAMPTZ`。完整 DDL 位于 [`postgresql/ddl.sql`](../liteflow-rule-db/liteflow-rule-db-postgresql/src/main/resources/postgresql/ddl.sql)。Publisher 在同一事务中锁定 `change_lock.lock_id = 1`、写正文并通过 `INSERT ... RETURNING seq` 取得变更序号；该行锁同样保证 seq 分配顺序与提交顺序一致。
+
+已有 PostgreSQL 部署必须在恢复发布流量前执行以下迁移。示例使用默认前缀 `lf_`；自定义 `table-prefix` 时同步替换表名。
+
+```sql
+CREATE TABLE IF NOT EXISTS lf_change_lock (
+  lock_id SMALLINT PRIMARY KEY
+);
+INSERT INTO lf_change_lock (lock_id) VALUES (1)
+ON CONFLICT (lock_id) DO NOTHING;
+```
+
+表存在但 `lock_id = 1` 行缺失同样会使发布失败。不要删除或更新这行数据。
 
 ### 7.6 MongoDB Collection
 
-默认创建以下四个 Collection，并自动建立 Manifest 与变更轮询所需索引：
+默认使用以下四个 Collection：
 
 | Collection | 内容 |
 |---|---|
@@ -595,6 +654,8 @@ PostgreSQL 使用 `chain`、`script`、`change_log` 三张表，逻辑字段与 
 | `lf_script` | script 元数据与正文。 |
 | `lf_sequence` | 每个 applicationName 独立的连续 seq。 |
 | `lf_change_log` | `seq`、目标类型、目标 id、操作和业务版本。 |
+
+Publisher 初始化时负责建立 Manifest 与变更轮询所需索引：`lf_chain.applicationName`、`lf_script.applicationName`，以及唯一复合索引 `lf_change_log(applicationName, seq)`。执行侧 Provider 为支持最小权限账号，启动时不会创建 Collection 或索引；只部署执行节点时，必须先运行一次 Publisher 初始化，或由 DBA 等价地预建这些索引。
 
 Manifest 查询只投影元数据字段，不读取 EL／脚本正文，并通过快照事务保证元数据与 sequence 基线一致。Publisher 在一个 MongoDB 多文档事务里同时更新内容、sequence 和 change log；因此运行与发布都必须连接支持事务的副本集或分片集群。
 
@@ -888,9 +949,9 @@ GET /actuator/liteflow/ruledb
 
 2. **六个 Rule-DB 插件同一时刻 classpath 只能有一个。** `liteflow-rule-db-sql` / `-postgresql` / `-mongodb` / `-redis` / `-zk` / `-etcd` 六选一。同时存在多个会启动报错要求只保留一个。
 
-3. **Redis Cluster 当前不支持原子发布（重要）。** `RedisRulePublisher` 的 Lua 脚本会触碰 4 个键（`chain:{id}`、`chain-ids`、`seq`、`changelog`），这些键**没有共享 Redis hash-tag**，在 Redis Cluster 下会落在不同 slot，`EVAL` 会以 `CROSSSLOT` 错误失败。
-   - **v1 支持的部署**：单节点、哨兵（sentinel）。
-   - **Redis Cluster**：v1 暂不支持原子发布，后续版本会通过 hash-tag 路由（`{app}` 作 hash-tag 把所有键固定到同一 slot）解决。在此之前，需要 Redis Cluster 的场景请先用 SQL / PostgreSQL / MongoDB / zk / etcd 模式，或等 hash-tag 支持。
+3. **Redis Cluster 必须配置 `key-hash-tag`。** `RedisRulePublisher` 的 Lua 脚本会触碰 4 个键（`chain:{id}`、`chain-ids`、`seq`、`changelog`），多键 `EVAL` 要求这些键落在同一 slot，否则 Cluster 会以 `CROSSSLOT` 错误失败。模块已通过 hash-tag 支持：配置 `liteflow.rule-db.redis.key-hash-tag` 后，所有键按 `{prefix}:{hashTag}:{app}:...` 布局、固定到同一 slot，原子发布可正常工作。
+   - **cluster 模式（多地址且无 `master-name`）**：`key-hash-tag` 为必填，未配置时建连直接抛 `ConfigErrorException`（fail-fast，不会带病启动）。
+   - **单机 / 哨兵模式**：无 slot 约束，`key-hash-tag` 可不配；配置了也会生效（改变键布局，请勿在已有数据的实例上随意增删该配置）。
 
 4. **MongoDB 必须支持多文档事务。** 运行时的 Manifest 快照读取与 Publisher 都使用事务，因此只支持副本集或分片集群；standalone MongoDB 不受支持。
 

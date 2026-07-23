@@ -16,6 +16,8 @@ public final class RedisKeys {
 	public RedisKeys(String keyPrefix, String applicationName, String keyHashTag) {
 		String prefix = StrUtil.isBlank(keyPrefix) ? "lf" : keyPrefix;
 		String app = StrUtil.isBlank(applicationName) ? "default" : applicationName;
+		requireKeyPart("key-prefix", prefix);
+		requireKeyPart("application-name", app);
 		if (StrUtil.isBlank(keyHashTag)) {
 			this.base = prefix + ":" + app;
 			return;
@@ -24,7 +26,18 @@ public final class RedisKeys {
 		if (hashTag.indexOf('{') >= 0 || hashTag.indexOf('}') >= 0) {
 			throw new ConfigErrorException("rule-db redis key-hash-tag must not contain '{' or '}'");
 		}
+		requireKeyPart("key-hash-tag", hashTag);
 		this.base = prefix + ":{" + hashTag + "}:" + app;
+	}
+
+	private static void requireKeyPart(String field, String value) {
+		for (int i = 0; i < value.length(); i++) {
+			char c = value.charAt(i);
+			if (c == ':' || Character.isWhitespace(c)) {
+				throw new ConfigErrorException(
+						"rule-db redis " + field + " must not contain ':' or whitespace");
+			}
+		}
 	}
 
 	public String chain(String chainId) {

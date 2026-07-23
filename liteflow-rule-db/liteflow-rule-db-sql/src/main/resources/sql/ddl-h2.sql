@@ -36,3 +36,9 @@ CREATE TABLE IF NOT EXISTS ${prefix}change_log (
   PRIMARY KEY (seq)
 );
 CREATE INDEX IF NOT EXISTS idx_app_seq ON ${prefix}change_log (application_name, seq);
+CREATE TABLE IF NOT EXISTS ${prefix}change_lock (
+  lock_id TINYINT NOT NULL,
+  PRIMARY KEY (lock_id)
+);
+INSERT INTO ${prefix}change_lock (lock_id)
+SELECT 1 WHERE NOT EXISTS (SELECT 1 FROM ${prefix}change_lock WHERE lock_id = 1);

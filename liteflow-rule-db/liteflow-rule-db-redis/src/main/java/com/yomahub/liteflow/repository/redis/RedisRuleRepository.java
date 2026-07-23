@@ -1,10 +1,12 @@
 package com.yomahub.liteflow.repository.redis;
 
 import cn.hutool.core.util.StrUtil;
+import com.yomahub.liteflow.exception.ConfigErrorException;
 import com.yomahub.liteflow.exception.SeqGapException;
 import com.yomahub.liteflow.property.LiteflowConfigGetter;
 import com.yomahub.liteflow.property.RuleDbConfig;
 import com.yomahub.liteflow.property.RuleDbRedisConfig;
+import com.yomahub.liteflow.publisher.exception.RuleStorageException;
 import com.yomahub.liteflow.repository.RuleRepository;
 import com.yomahub.liteflow.repository.vo.ChainMeta;
 import com.yomahub.liteflow.repository.vo.ChainRecord;
@@ -31,6 +33,9 @@ import java.util.Set;
 /** Redis authoritative repository using ID sets and pipelined metadata reads. */
 public class RedisRuleRepository implements RuleRepository {
 
+	static final int DEFAULT_CHANGELOG_BATCH_SIZE = 1000;
+	static final int MANIFEST_SNAPSHOT_ATTEMPTS = 5;
+
 	private static final Set<String> CHAIN_META_FIELDS = fields("version", "md5", "enable");
 	private static final Set<String> SCRIPT_META_FIELDS = fields(
 			"version", "md5", "enable", "type", "language", "name");
@@ -54,6 +59,21 @@ public class RedisRuleRepository implements RuleRepository {
 
 	@Override
 	public RuleManifest fetchManifest() {
+		long before = -1;
+		long after = -1;
+		for (int attempt = 0; attempt < MANIFEST_SNAPSHOT_ATTEMPTS; attempt++) {
+			before = fetchLatestSeq();
+			RuleManifest manifest = fetchManifestOnce();
+			after = manifest.getLatestSeq();
+			if (before == after) {
+				return manifest;
+			}
+		}
+		throw new RuleStorageException("Redis manifest changed during " + MANIFEST_SNAPSHOT_ATTEMPTS
+				+ " consecutive snapshot attempts (before=" + before + ", after=" + after + ")");
+	}
+
+	private RuleManifest fetchManifestOnce() {
 		RedissonClient client = redisson();
 		List<String> chainIds = sorted(client.<String>getSet(keys.chainIds(), StringCodec.INSTANCE).readAll());
 		List<String> scriptIds = sorted(client.<String>getSet(keys.scriptIds(), StringCodec.INSTANCE).readAll());
@@ -159,6 +179,13 @@ public class RedisRuleRepository implements RuleRepository {
 	}
 
 	public List<ChangeRecord> fetchChangesSince(long seq) {
+		return fetchChangesSince(seq, DEFAULT_CHANGELOG_BATCH_SIZE);
+	}
+
+	public List<ChangeRecord> fetchChangesSince(long seq, int limit) {
+		if (limit <= 0) {
+			throw new ConfigErrorException("rule-db redis change-log batch size must be positive");
+		}
 		RScoredSortedSet<String> log = redisson().getScoredSortedSet(keys.changelog(), StringCodec.INSTANCE);
 		Collection<ScoredEntry<String>> firstEntry = log.entryRange(0, 0);
 		if (seq > 0 && !firstEntry.isEmpty()) {
@@ -169,7 +196,7 @@ public class RedisRuleRepository implements RuleRepository {
 		}
 
 		List<ChangeRecord> changes = new ArrayList<>();
-		Collection<String> members = log.valueRange(seq, false, Double.POSITIVE_INFINITY, true);
+		Collection<String> members = log.valueRange(seq, false, Double.POSITIVE_INFINITY, true, 0, limit);
 		for (String json : members) {
 			changes.add(ChangeCodec.fromJson(json));
 		}

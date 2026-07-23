@@ -101,42 +101,49 @@ public class SqlRuleRepository implements RuleRepository {
 		String scriptSql = "SELECT node_id, version, content_md5, script_type, script_language, script_name FROM "
 				+ dialect.scriptTable() + " WHERE application_name = ? AND enable = 1";
 		try (Connection c = conn()) {
+			// 连接可能借自连接池，先记录原始事务状态，归还前在 finally 中复位，避免污染下一个借用者
+			int originalIsolation = c.getTransactionIsolation();
+			boolean originalAutoCommit = c.getAutoCommit();
 			c.setTransactionIsolation(Connection.TRANSACTION_REPEATABLE_READ);
 			c.setAutoCommit(false);
-			try (PreparedStatement ps = c.prepareStatement(chainSql)) {
-				ps.setString(1, app());
-				try (ResultSet rs = ps.executeQuery()) {
-					while (rs.next()) {
-						chains.add(new ChainMeta(rs.getString(1), rs.getLong(2), rs.getString(3)));
+			try {
+				try (PreparedStatement ps = c.prepareStatement(chainSql)) {
+					ps.setString(1, app());
+					try (ResultSet rs = ps.executeQuery()) {
+						while (rs.next()) {
+							chains.add(new ChainMeta(rs.getString(1), rs.getLong(2), rs.getString(3)));
+						}
 					}
 				}
-			}
-			try (PreparedStatement ps = c.prepareStatement(scriptSql)) {
-				ps.setString(1, app());
-				try (ResultSet rs = ps.executeQuery()) {
-					while (rs.next()) {
-						scripts.add(new ScriptMeta(rs.getString(1), rs.getLong(2), rs.getString(3),
-								rs.getString(4), rs.getString(5), rs.getString(6)));
+				try (PreparedStatement ps = c.prepareStatement(scriptSql)) {
+					ps.setString(1, app());
+					try (ResultSet rs = ps.executeQuery()) {
+						while (rs.next()) {
+							scripts.add(new ScriptMeta(rs.getString(1), rs.getLong(2), rs.getString(3),
+									rs.getString(4), rs.getString(5), rs.getString(6)));
+						}
 					}
 				}
-			}
-			manifest.setChains(chains);
-			manifest.setScripts(scripts);
-			// 内联 MAX(seq) 查询复用当前连接 c，不再调 fetchLatestSeq()（后者会再借一条连接，
-			// 在 HikariCP maximumPoolSize=1 时与已持有的 c 自死锁）
-			String seqSql = "SELECT MAX(seq) FROM " + dialect.changeLogTable() + " WHERE application_name = ?";
-			try (PreparedStatement seqPs = c.prepareStatement(seqSql)) {
-				seqPs.setString(1, app());
-				try (ResultSet rs = seqPs.executeQuery()) {
-					if (rs.next()) {
-						long v = rs.getLong(1);
-						manifest.setLatestSeq(rs.wasNull() ? 0 : v);
-					} else {
-						manifest.setLatestSeq(0);
+				manifest.setChains(chains);
+				manifest.setScripts(scripts);
+				// 内联 MAX(seq) 查询复用当前连接 c，不再调 fetchLatestSeq()（后者会再借一条连接，
+				// 在 HikariCP maximumPoolSize=1 时与已持有的 c 自死锁）
+				String seqSql = "SELECT MAX(seq) FROM " + dialect.changeLogTable() + " WHERE application_name = ?";
+				try (PreparedStatement seqPs = c.prepareStatement(seqSql)) {
+					seqPs.setString(1, app());
+					try (ResultSet rs = seqPs.executeQuery()) {
+						if (rs.next()) {
+							long v = rs.getLong(1);
+							manifest.setLatestSeq(rs.wasNull() ? 0 : v);
+						} else {
+							manifest.setLatestSeq(0);
+						}
 					}
 				}
+				c.commit();
+			} finally {
+				resetStateQuietly(c, originalAutoCommit, originalIsolation);
 			}
-			c.commit();
 		} catch (SQLException e) {
 			throw wrap("fetchManifest", e);
 		}
@@ -297,6 +304,21 @@ public class SqlRuleRepository implements RuleRepository {
 
 	private RuntimeException wrap(String op, SQLException e) {
 		return new RuntimeException("rule-db sql " + op + " failed: " + e.getMessage(), e);
+	}
+
+	/**
+	 * 归还（关闭）借出连接前复位事务状态：先恢复 autoCommit 结束当前事务，再恢复隔离级别
+	 * （部分驱动不允许在活跃事务中改隔离级别）。复位失败说明连接本身已损坏，静默忽略。
+	 */
+	private static void resetStateQuietly(Connection c, boolean autoCommit, int isolation) {
+		try {
+			c.setAutoCommit(autoCommit);
+		} catch (SQLException ignored) {
+		}
+		try {
+			c.setTransactionIsolation(isolation);
+		} catch (SQLException ignored) {
+		}
 	}
 
 	private boolean autoInitTable() {
