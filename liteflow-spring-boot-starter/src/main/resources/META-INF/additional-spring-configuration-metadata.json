@@ -867,6 +867,69 @@
       "sourceType": "com.yomahub.liteflow.property.RuleDbZkConfig"
     },
     {
+      "name": "liteflow.rule-db.nacos.server-addr",
+      "type": "java.lang.String",
+      "description": "Nacos server address. Blank means lookup a ConfigService bean.",
+      "sourceType": "com.yomahub.liteflow.property.RuleDbNacosConfig"
+    },
+    {
+      "name": "liteflow.rule-db.nacos.namespace",
+      "type": "java.lang.String",
+      "description": "Nacos namespace id. Blank means the public namespace.",
+      "sourceType": "com.yomahub.liteflow.property.RuleDbNacosConfig"
+    },
+    {
+      "name": "liteflow.rule-db.nacos.group",
+      "type": "java.lang.String",
+      "description": "Nacos group containing Rule-DB catalogs.",
+      "sourceType": "com.yomahub.liteflow.property.RuleDbNacosConfig",
+      "defaultValue": "LITEFLOW_RULE_DB"
+    },
+    {
+      "name": "liteflow.rule-db.nacos.data-id-prefix",
+      "type": "java.lang.String",
+      "description": "Prefix used to build the Nacos catalog dataId.",
+      "sourceType": "com.yomahub.liteflow.property.RuleDbNacosConfig",
+      "defaultValue": "liteflow-rule-db"
+    },
+    {
+      "name": "liteflow.rule-db.nacos.username",
+      "type": "java.lang.String",
+      "description": "Nacos username. Must be configured together with password.",
+      "sourceType": "com.yomahub.liteflow.property.RuleDbNacosConfig"
+    },
+    {
+      "name": "liteflow.rule-db.nacos.password",
+      "type": "java.lang.String",
+      "description": "Nacos password. Must be configured together with username.",
+      "sourceType": "com.yomahub.liteflow.property.RuleDbNacosConfig"
+    },
+    {
+      "name": "liteflow.rule-db.nacos.access-key",
+      "type": "java.lang.String",
+      "description": "Nacos access key. Must be configured together with secret-key and cannot be combined with username/password.",
+      "sourceType": "com.yomahub.liteflow.property.RuleDbNacosConfig"
+    },
+    {
+      "name": "liteflow.rule-db.nacos.secret-key",
+      "type": "java.lang.String",
+      "description": "Nacos secret key. Must be configured together with access-key and cannot be combined with username/password.",
+      "sourceType": "com.yomahub.liteflow.property.RuleDbNacosConfig"
+    },
+    {
+      "name": "liteflow.rule-db.nacos.timeout-millis",
+      "type": "java.lang.Long",
+      "description": "Nacos configuration request timeout in milliseconds.",
+      "sourceType": "com.yomahub.liteflow.property.RuleDbNacosConfig",
+      "defaultValue": 3000
+    },
+    {
+      "name": "liteflow.rule-db.nacos.config-service-bean-name",
+      "type": "java.lang.String",
+      "description": "Name of an existing com.alibaba.nacos.api.config.ConfigService bean to reuse.",
+      "sourceType": "com.yomahub.liteflow.property.RuleDbNacosConfig"
+    },
+    {
       "name": "liteflow.metrics.enabled",
       "type": "java.lang.Boolean",
       "description": "Whether to enable liteflow metrics collection (chain/node timers, counters and registry gauges). Requires a MeterRegistry on the classpath and in the context. Defaults to true.",

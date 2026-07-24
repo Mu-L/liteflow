@@ -13,5 +13,7 @@ public enum PublisherBackend {
 
 	ETCD,
 
-	ZK
+	ZK,
+
+	NACOS
 }

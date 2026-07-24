@@ -53,6 +53,7 @@
         <module>liteflow-testcase-el-rule-db-redis-springboot</module>
         <module>liteflow-testcase-el-rule-db-etcd-springboot</module>
         <module>liteflow-testcase-el-rule-db-zk-springboot</module>
+        <module>liteflow-testcase-el-rule-db-nacos-springboot</module>
     </modules>
 
     <profiles>
@@ -71,6 +72,7 @@
 				<module>liteflow-testcase-el-rule-db-redis-springboot4</module>
 				<module>liteflow-testcase-el-rule-db-etcd-springboot4</module>
 				<module>liteflow-testcase-el-rule-db-zk-springboot4</module>
+				<module>liteflow-testcase-el-rule-db-nacos-springboot4</module>
             </modules>
         </profile>
     </profiles>

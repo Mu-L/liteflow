@@ -1,19 +1,20 @@
 # LiteFlow Rule-DB 模式使用指南
 
-LiteFlow 的 Rule-DB 模式让规则和脚本**真正以 SQL 数据库 / PostgreSQL / MongoDB / Redis / ZooKeeper / etcd 为权威源**，JVM 只保留轻量索引 + 有界缓存。它解决了原有 6 个规则插件「启动拼一份大 XML、规则全量常驻堆内存、多节点各跑各的没有一致性保证」的本质痛点：多节点能在秒级窗口内收敛到同一版本，且 JVM 内存占用与规则总量解耦。
+LiteFlow 的 Rule-DB 模式让规则和脚本**真正以 SQL 数据库 / PostgreSQL / MongoDB / Redis / ZooKeeper / etcd / Nacos 为权威源**，JVM 只保留轻量索引 + 有界缓存。它解决了原有 6 个规则插件「启动拼一份大 XML、规则全量常驻堆内存、多节点各跑各的没有一致性保证」的本质痛点：多节点能在秒级窗口内收敛到同一版本，且 JVM 内存占用与规则总量解耦。
 
 本文分两部分：
 
-- **上手篇**：从「它和老的规则插件有什么不同」讲起，带你用六种后端跑通第一条 Rule-DB 规则。先看这部分。
+- **上手篇**：从「它和老的规则插件有什么不同」讲起，带你用七种后端跑通第一条 Rule-DB 规则。先看这部分。
 - **参考篇**：每个配置项、表结构/键结构/路径结构、发布协议、一致性模型、降级语义、可观测性、限制清单，需要查细节时再来。
 
 读完上手篇你应该能：引入一个依赖 → 写三行（或零行）配置 → 用发布 API 发布一条规则 → 像平时一样 `flowExecutor.execute2Resp(...)` 执行它。
 
-> 本能力由根级独立父模块 `liteflow-rule-db` 聚合的六个插件模块提供，随 `2.16.1` 发布：
+> 本能力由根级独立父模块 `liteflow-rule-db` 聚合的七个插件模块提供，随 `2.16.1` 发布：
 > - **`liteflow-rule-db-sql`** / **`liteflow-rule-db-postgresql`** / **`liteflow-rule-db-mongodb`** / **`liteflow-rule-db-redis`**：增量 + 轮询模型（seq 轮询 + 周期对账收敛）。
 > - **`liteflow-rule-db-zk`** / **`liteflow-rule-db-etcd`**：监听模型（watch 实时推送 + 周期对账收敛）。
+> - **`liteflow-rule-db-nacos`**：原子 Catalog + 监听模型（Nacos CAS 整体发布 + Listener 实时推送 + 周期对账收敛）。
 >
-> 它们不属于 `liteflow-rule-plugin` 下原有的「启动拼 XML」式插件，双方**完全独立、互不干扰**。六个 Rule-DB 插件**同一时刻 classpath 只能有一个**（启动时检测到多个会直接报错）。
+> 它们不属于 `liteflow-rule-plugin` 下原有的「启动拼 XML」式插件，双方在运行模型与配置上独立。七个 Rule-DB 插件**同一时刻 classpath 只能有一个**（启动时检测到多个会直接报错）；同一后端迁移时也应移除旧规则插件，Nacos 的客户端版本要求见 §5.3。
 
 ---
 
@@ -38,8 +39,8 @@ Rule-DB 模式把这两件事一次性解决：
 
 1. **存储是权威源，JVM 只是缓存。** 任何写入（发布/删除）都走发布 API，原子完成「更新内容 + 版本号 +1 + 写变更日志」。所有节点通过「**变更通知 + 周期对账**」两条腿收敛，即使通知丢失，对账周期内也必然收敛——一致性语义是**最终收敛、秒级窗口**。变更通知的具体形式随后端而异：
    - **SQL / PostgreSQL / MongoDB / Redis**：seq 序号轮询（默认 3s 一次）。
-   - **ZooKeeper / etcd**：长连接 watch 实时推送（毫秒级）。
-   - 六者都叠加一条 **周期全量对账**（默认 60s）作为最终兜底。
+   - **ZooKeeper / etcd / Nacos**：长连接监听实时推送（毫秒级或亚秒级）。
+   - 七者都叠加一条 **周期全量对账**（默认 60s）作为最终兜底。
 2. **JVM 内存占用与规则总量解耦。** 常驻内存的只有「id → 版本戳 + 轻量元数据」索引；EL 文本、脚本源码、编译产物全部进**有界缓存**（容量按 chain 条数配），按 LRU 淘汰，淘汰后退回「影子」状态，下次执行再懒加载。
 
 一句话划清边界：**老的 6 个插件 = 启动一次性灌库，之后各节点各跑各的；Rule-DB = 存储永远是权威，JVM 只缓存热规则，所有节点最终一致。**
@@ -231,7 +232,7 @@ publisher.removeScript(RemoveRuleRequest.builder().targetId("s1").build());
 
 ## 4. 快速上手（ZooKeeper）
 
-zk / etcd 与 SQL / PostgreSQL / MongoDB / Redis 的区别在于：它们用**长连接 watch 实时推送**感知变更（毫秒级），而不是 seq 轮询；周期对账仍作为兜底。
+zk / etcd / Nacos 与 SQL / PostgreSQL / MongoDB / Redis 的区别在于：前三者用**长连接监听实时推送**感知变更（毫秒级或亚秒级），而不是 seq 轮询；周期对账仍作为兜底。
 
 ### Step 1：引入依赖
 
@@ -384,6 +385,69 @@ publisher.publishChain(PublishChainRequest.builder()
 
 MongoDB 后端使用多文档事务原子发布规则，并使用快照事务读取一致的 Manifest 和序号基线，因此整个后端都要求**副本集或分片集群**；standalone MongoDB 不受支持。
 
+## 5.3 快速上手（Nacos）
+
+Nacos Rule-DB 依赖 `publishConfigCas` 保证并发发布的原子性，因此要求 **Nacos Server 2.x 或更高版本**。该模块显式使用 `nacos-client:2.5.3`，旧 `liteflow-rule-nacos` 插件仍使用 1.4.4；迁移时不要把两个模块同时放进同一 classpath。若外部 BOM 把客户端降级为不含 CAS API 的版本，模块会在初始化时 fail-fast。
+
+### Step 1：引入依赖
+
+```xml
+<dependency>
+    <groupId>com.yomahub</groupId>
+    <artifactId>liteflow-rule-db-nacos</artifactId>
+    <version>2.16.1</version>
+</dependency>
+```
+
+### Step 2：写配置
+
+```properties
+liteflow.rule-db.nacos.server-addr=127.0.0.1:8848
+# namespace 填命名空间 ID，不是显示名称；留空使用 public
+# liteflow.rule-db.nacos.namespace=your-namespace-id
+# group 默认 LITEFLOW_RULE_DB
+# data-id-prefix 默认 liteflow-rule-db
+# application-name 留空，自动取 spring.application.name
+```
+
+运行时会把当前应用映射为一条 Nacos 配置：
+
+```text
+dataId = {data-id-prefix}.{application-name}.catalog.json
+group  = {group}
+```
+
+例如应用名为 `order-service` 时，默认 `dataId` 是 `liteflow-rule-db.order-service.catalog.json`，默认 group 是 `LITEFLOW_RULE_DB`。容器里已有 `ConfigService` bean 时可不配 `server-addr`；多 bean 场景用 `config-service-bean-name` 精确指定。
+
+### Step 3：发布第一条规则
+
+```java
+import com.yomahub.liteflow.publisher.PublishChainRequest;
+import com.yomahub.liteflow.publisher.RulePublisher;
+import com.yomahub.liteflow.publisher.RulePublisherFactory;
+import com.yomahub.liteflow.repository.nacos.NacosPublisherConfig;
+
+try (RulePublisher publisher = RulePublisherFactory.create(
+        NacosPublisherConfig.builder()
+                .serverAddr("127.0.0.1:8848")
+                .applicationName("order-service")
+                .build())) {
+    publisher.publishChain(PublishChainRequest.builder()
+            .chainId("orderChain")
+            .el("THEN(a, b)")
+            .expectedVersion(0L)
+            .build());
+}
+```
+
+每次发布先读取当前 Catalog，再通过 Nacos CAS 整体替换。Catalog 内的正文、业务版本、全局 sequence 和 `lastChange` 在同一次 CAS 中提交；并发写入冲突会重新读取后重试，显式 `expectedVersion` 已失效时抛 `VersionConflictException`。执行节点通过 Nacos Listener 感知 `lastChange`，发现序号跳跃、损坏内容或回调失败时立即请求全量对账。
+
+> **容量前置评估：** 一个应用的全部 chain 与脚本正文都在同一条 Nacos 配置中，受 Nacos 服务端、数据库字段和接入层的单配置大小限制。上线前必须用生产等价配置压测 Catalog 最大体积并预留增长空间；规则规模大、正文很长或发布频繁时，优先选择 SQL / PostgreSQL / MongoDB。执行端不会长期保留整份 Catalog 正文，但每次冷读取和对账都需要传输并解码整份配置。
+
+### Step 4：执行
+
+同前，照常 `flowExecutor.execute2Resp(...)`。
+
 ---
 
 上手篇到此结束。下面参考篇是逐项细节，按需查阅。
@@ -394,9 +458,9 @@ MongoDB 后端使用多文档事务原子发布规则，并使用快照事务读
 
 ## 6. 配置参考
 
-所有 Rule-DB 配置都在 `liteflow.rule-db.*` 命名空间下，绑定到 `com.yomahub.liteflow.property.RuleDbConfig`。配置是**嵌套结构**：通用项在 `liteflow.rule-db.*`，缓存项在 `liteflow.rule-db.cache.*`，同步项在 `liteflow.rule-db.sync.*`，各后端专属项分别位于 `.sql.*` / `.postgresql.*` / `.mongodb.*` / `.redis.*` / `.zk.*` / `.etcd.*`。
+所有 Rule-DB 配置都在 `liteflow.rule-db.*` 命名空间下，绑定到 `com.yomahub.liteflow.property.RuleDbConfig`。配置是**嵌套结构**：通用项在 `liteflow.rule-db.*`，缓存项在 `liteflow.rule-db.cache.*`，同步项在 `liteflow.rule-db.sync.*`，各后端专属项分别位于 `.sql.*` / `.postgresql.*` / `.mongodb.*` / `.redis.*` / `.zk.*` / `.etcd.*` / `.nacos.*`。
 
-### 通用配置（六个后端共用）
+### 通用配置（七个后端共用）
 
 | 配置项 | 默认 | 说明 |
 |---|---|---|
@@ -404,7 +468,7 @@ MongoDB 后端使用多文档事务原子发布规则，并使用快照事务读
 | `liteflow.rule-db.application-name` | Spring Boot 应用自动取 `spring.application.name` | 多应用共库的隔离维度。同一套存储里不同 `application-name` 的规则互不可见。非 Spring / Solon 环境或未配 `spring.application.name` 时回落为 `default`——**多应用共库时务必保证各应用取值不同**，否则会互相读写对方的规则。 |
 | `liteflow.rule-db.cache.capacity` | `500` | 有界缓存容量（按 chain 条数计）。超出按 LRU 淘汰，淘汰的 chain 退回影子状态，其引用的脚本引用计数减一。 |
 | `liteflow.rule-db.cache.preload-chain-ids` | 空 | 启动预热的 chain id 列表（逗号分隔）。关键链路建议列在这里，抹平冷启动的首次回源尖刺。预热失败只记一条 warn、不会阻断启动。 |
-| `liteflow.rule-db.sync.poll-seconds` | `3`（SQL / PostgreSQL / MongoDB / Redis） | 变更序号轮询周期；zk / etcd 用 watch，该项对它们不生效。 |
+| `liteflow.rule-db.sync.poll-seconds` | `3`（SQL / PostgreSQL / MongoDB / Redis） | 变更序号轮询周期；zk / etcd / Nacos 用监听，该项对它们不生效。 |
 | `liteflow.rule-db.sync.reconcile-seconds` | `60` | 清单对账周期，全量 diff 索引与缓存。无论通知还是轮询都丢了的极端情况下，这个周期是收敛的最终保证。 |
 | `liteflow.rule-db.sync.fetch-retry-times` | `3` | 回源拉取失败的重试次数。 |
 
@@ -498,6 +562,21 @@ etcd 后端的 TLS 由 endpoint scheme 驱动：
 - **单向 TLS**：endpoints 全部使用 `https://`，按需配置 `ca-certificate` 指定私有 CA；不配则用 JVM 默认信任库。
 - **双向 TLS（mTLS）**：在单向 TLS 基础上，成对配置 `client-certificate` + `client-key`，供开启了客户端证书校验的 etcd 集群认证。
 - 以下配置错误都会在启动时 fail-fast（`ConfigErrorException`）：http/https endpoint 混用；`user`/`password` 只配一个；`client-certificate`/`client-key` 只配一个；在 `http://` endpoints 下配置任何证书；证书文件不存在或不可读；超时/keepalive 参数 ≤ 0。
+
+### Nacos 专属配置（`liteflow-rule-db-nacos`）
+
+| 配置项 | 默认 | 说明 |
+|---|---|---|
+| `liteflow.rule-db.nacos.server-addr` | — | Nacos 地址；不配则自动查找容器中的 `ConfigService` bean。要求连接 Nacos Server 2.x 或更高版本。 |
+| `liteflow.rule-db.nacos.namespace` | public | Nacos namespace ID；不要填写控制台显示名称。 |
+| `liteflow.rule-db.nacos.group` | `LITEFLOW_RULE_DB` | Catalog 所在 group；只允许 Nacos 支持的字母、数字、下划线、连字符、点和冒号。 |
+| `liteflow.rule-db.nacos.data-id-prefix` | `liteflow-rule-db` | Catalog 的 dataId 前缀，最终 dataId 为 `{prefix}.{applicationName}.catalog.json`。字符约束同 group。 |
+| `liteflow.rule-db.nacos.username` / `.password` | — | Nacos 用户名和口令，必须成对配置。 |
+| `liteflow.rule-db.nacos.access-key` / `.secret-key` | — | Nacos AK/SK，必须成对配置；不能与 username/password 同时配置。 |
+| `liteflow.rule-db.nacos.timeout-millis` | `3000` | 配置读取和监听注册超时（毫秒），必须大于 0。 |
+| `liteflow.rule-db.nacos.config-service-bean-name` | 自动查找 | 复用容器中已有 `ConfigService` bean 的名字；未指定时按类型自动查找。复用的 bean 归容器所有，Provider 关闭时不会调用其 `shutDown()`。 |
+
+独立 Publisher 通过 `NacosPublisherConfig.configService(...)` 复用外部客户端，所有权规则相同；未传客户端时由 Publisher 创建并在 `close()` 时关闭。显式 bean／客户端已包含连接与认证配置，此时 `server-addr` 等建连参数不参与创建。
 
 ### 与旧配置的关系
 
@@ -659,13 +738,56 @@ Publisher 初始化时负责建立 Manifest 与变更轮询所需索引：`lf_ch
 
 Manifest 查询只投影元数据字段，不读取 EL／脚本正文，并通过快照事务保证元数据与 sequence 基线一致。Publisher 在一个 MongoDB 多文档事务里同时更新内容、sequence 和 change log；因此运行与发布都必须连接支持事务的副本集或分片集群。
 
+### 7.7 Nacos Catalog
+
+Nacos 后端按 applicationName 存一条 JSON Catalog：
+
+```text
+dataId = {data-id-prefix}.{application-name}.catalog.json
+group  = {group}
+```
+
+Catalog 的逻辑结构如下，数组内保存完整的 chain／script 记录：
+
+```json
+{
+  "schemaVersion": 1,
+  "sequence": 2,
+  "chains": [
+    {
+      "chainId": "orderChain",
+      "el": "THEN(a,b)",
+      "route": null,
+      "namespace": null,
+      "version": 1,
+      "md5": "...",
+      "enable": true
+    }
+  ],
+  "scripts": [],
+  "lastChange": {
+    "seq": 2,
+    "targetType": "CHAIN",
+    "targetId": "orderChain",
+    "op": "UPSERT",
+    "version": 1
+  }
+}
+```
+
+`sequence` 是应用级连续序号，`lastChange.seq` 必须与之相等。读取端会严格校验 schema、字段类型、重复 id、正文 MD5、业务版本以及 `lastChange` 与最终记录是否一致；Catalog 损坏、序号倒退或内容变化但序号不变都会被视为存储错误，而不是静默接受。
+
+Publisher 使用当前 Nacos 配置 MD5 作为 CAS 条件，整体替换 Catalog，因此正文、Manifest、业务版本与变更序号不存在跨配置的中间态。Listener 只需传递最新 `lastChange`；如果 Nacos 合并了连续回调，执行节点会检测到 sequence 断档并转为全量对账。
+
+执行端常驻快照只保存 `sequence + Catalog MD5`，不会把 `chains` / `scripts` 正文长期留在 Provider 内；但 Nacos 的读取粒度仍是整份配置，Manifest 对账和每次缓存未命中的正文读取都会传输、校验并短暂解码整个 Catalog。因此该后端面向中小规模规则集，容量与吞吐评估必须按“单应用整份 Catalog”进行。
+
 ---
 
 ## 8. 发布协议与写入规范
 
 ### 8.1 推荐：统一发布 API
 
-六个后端共用一套发布接口 `com.yomahub.liteflow.publisher.RulePublisher`，通过 `RulePublisherFactory.create(config)` 按你传入的后端配置实例化。**这是推荐写入方式**，尤其适合独立的管理后台（只依赖一个插件 jar、不拉起 FlowExecutor、不依赖全局 `LiteflowConfig`）。
+七个后端共用一套发布接口 `com.yomahub.liteflow.publisher.RulePublisher`，通过 `RulePublisherFactory.create(config)` 按你传入的后端配置实例化。**这是推荐写入方式**，尤其适合独立的管理后台（只依赖一个插件 jar、不拉起 FlowExecutor、不依赖全局 `LiteflowConfig`）。
 
 ```java
 // 以 Redis 为例；其他后端换成对应的 XxxPublisherConfig
@@ -682,7 +804,7 @@ PublishResult r = publisher.publishChain(PublishChainRequest.builder()
         .namespace("ns1")         // 可选：命名空间
         .build());
 r.getVersion();   // 新版本号
-r.getSequence();  // 变更序号（SQL/PostgreSQL/MongoDB/Redis seq，zk zxid，etcd revision）
+r.getSequence();  // 变更序号（SQL/PostgreSQL/MongoDB/Redis/Nacos seq，zk zxid，etcd revision）
 ```
 
 三个请求类型都是不可变 builder 对象，另外返回一个 `PublishResult`：
@@ -700,7 +822,7 @@ r.getSequence();  // 变更序号（SQL/PostgreSQL/MongoDB/Redis seq，zk zxid�
 
 `VersionConflictException`、配置/校验错误分别有独立异常类型（`com.yomahub.liteflow.publisher.exception.*`），方便上层区分「冲突重试」与「参数错误」。
 
-**生命周期：** `RulePublisher` 实现 `AutoCloseable`。SQL / PostgreSQL 后端每次操作借连接；Redis / MongoDB / zk / etcd 可能持有客户端连接，用完必须 `close()`（推荐 try-with-resources）。外部传入的 `DataSource`、`MongoClient` 或其他客户端仍归调用方所有，不会被 Publisher 关闭。
+**生命周期：** `RulePublisher` 实现 `AutoCloseable`。SQL / PostgreSQL 后端每次操作借连接；Redis / MongoDB / zk / etcd / Nacos 可能持有客户端连接，用完必须 `close()`（推荐 try-with-resources）。外部传入的 `DataSource`、`MongoClient`、`ConfigService` 或其他客户端仍归调用方所有，不会被 Publisher 关闭。
 
 **事务/原子性保证：**
 
@@ -710,6 +832,7 @@ r.getSequence();  // 变更序号（SQL/PostgreSQL/MongoDB/Redis seq，zk zxid�
 - **Redis**：一段 Lua 脚本在 Redis 单线程内原子完成 HSET 内容 → SADD 索引 → INCR seq → ZADD changelog，四步要么全成要么全不成，中间状态不可见。
 - **zk**：一个 multi-op 事务内原子写 meta + content znode。
 - **etcd**：一个事务（Txn）内原子写 meta + content key。
+- **Nacos**：读取当前 Catalog 后以其 MD5 为条件执行 CAS，原子替换正文、业务版本、sequence 和 `lastChange`；并发 CAS 失败会重新读取后重试，最多 8 次。
 
 ### 8.2 SQL 简化门面（便捷快捷方式）
 
@@ -734,6 +857,7 @@ v1 的 Publisher **没有** `enableChain/enableScript` API（留作后续）。�
 - MongoDB：更新对应文档的 `enable=false` 并递增 `version`。
 - Redis：`HSET {prefix}:{app}:chain:{id} enable 0`
 - zk / etcd：把对应 meta 节点里的 enable 标志置 0（编码见各后端 `*RecordCodec`）。
+- Nacos：当前 Catalog 协议不接受 `enable=false` 记录，不支持直改停用；请使用 `removeChain` / `removeScript`。
 
 注意直改 enable 不会产生变更日志/通知，各节点要等**下个对账周期**（默认最多 60s）才感知；zk/etcd 若改了 meta 节点内容会触发 watch，则秒级感知。已在缓存中的编译产物在感知前会继续执行。想立即生效，请用 `removeChain`（删除走变更通知，秒级收敛），或停用后再按 [§8.4](#84-绕过-api-直接写存储的规范不推荐但可做) 规范补一条变更日志。
 
@@ -754,9 +878,11 @@ PostgreSQL 直写遵循同一事务协议；MongoDB 直写必须在一个多文�
 
 **zk / etcd 直写规范**：必须在一个事务（zk multi-op / etcd Txn）内同时写 meta 和 content，保证二者版本一致。zk 不要绕过事务单独改一个节点。
 
+**Nacos 不支持通过控制台直接改 Catalog。** 正确发布需要基于当前内容 MD5 做 CAS，同时维护正文 MD5、业务版本、连续 sequence 和 `lastChange`；控制台覆盖写无法保持这套并发语义。请只使用 `RulePublisher`，需要迁移／恢复时也应由受控工具调用同一 API。
+
 ### 8.5 content_md5 对账双保险
 
-对账时先比 `version`，**相同再比 `content_md5`**。注意：比的是 `content_md5` **列的存量值**——引擎不会拉取内容重算哈希（manifest 只查元数据列/字段，不拖全文）。所以这道双保险防的是「version 判据失灵、但指纹仍然可信」的场景：
+对账时先比 `version`，**相同再比 `content_md5`**。除 Nacos 外，比的是 `content_md5` **列／字段的存量值**——引擎不会拉取内容重算哈希（manifest 只查元数据列／字段，不拖全文）。所以这道双保险防的是「version 判据失灵、但指纹仍然可信」的场景：
 
 - 备份恢复 / 跨环境导表：版本号恰好撞车（都是 v7）但内容不同 → md5 不同 → 对账纠正。
 - 写方更新了内容和 md5、但 version 没加上去（工具 bug、并发丢更新）→ md5 不同 → 对账纠正。
@@ -777,6 +903,8 @@ WHERE application_name = 'your-app' AND chain_id = 'chain1';
 
 这是兜底，**不是**鼓励绕过规范——规范路径才是快路径。
 
+Nacos 是例外：它每次读取都会对 Catalog 内的正文重新计算 MD5 并校验，指纹不匹配会直接拒绝整份 Catalog；仍然不能绕过 Publisher 修改，原因见 §8.4。
+
 ---
 
 ## 9. 一致性与收敛模型
@@ -793,8 +921,9 @@ Rule-DB 的多节点收敛靠两条独立的机制叠加，任何一条都能把
 | **Redis** | seq 轮询（`GET seq`） | `poll-seconds`（默认 3s） | 同上 |
 | **ZooKeeper** | watch 实时推送（CuratorCache 监听 meta 节点） | 毫秒级 | 同上 |
 | **etcd** | watch 实时推送（按 revision 订阅） | 毫秒级 | 同上 |
+| **Nacos** | Listener 推送（监听应用 Catalog） | 毫秒级或亚秒级 | 同上 |
 
-zk / etcd 的 watch 是毫秒级实时推送，轮询腿对它们不生效；SQL / PostgreSQL / MongoDB / Redis 没有推送通道，靠 seq 轮询。无论哪种，**周期对账都是兜底**——通知／轮询都失效也必收敛。
+zk / etcd / Nacos 使用长连接监听，轮询腿对它们不生效；SQL / PostgreSQL / MongoDB / Redis 没有推送通道，靠 seq 轮询。Nacos Listener 若跳过中间版本，sequence 断档会立即触发一次全量对账。无论哪种，**周期对账都是兜底**——通知／轮询都失效也必收敛。
 
 > Redis 模式**没有 pub/sub 推送**。有些同类设计会用 Redis `PUBLISH`/`SUBSCRIBE` 做毫秒级推送，本实现没有采用——Redis 的变更感知和 SQL 一样靠 seq 轮询。如果你依赖更快的 Redis 收敛，把 `poll-seconds` 调小（代价是更频繁的 `GET seq`）。
 
@@ -803,6 +932,7 @@ zk / etcd 的 watch 是毫秒级实时推送，轮询腿对它们不生效；SQL
 任何变更最迟在 **`max(通知延迟, 对账周期)`** 内被所有节点感知。典型值：
 
 - zk / etcd 模式：watch 毫秒级 + 对账 60s → 最迟 60s 内全集群收敛（实际多数情况毫秒级）。
+- Nacos 模式：Listener 推送 + 对账 60s → 最迟 60s 内全集群收敛（实际多数情况为毫秒级或亚秒级）。
 - SQL 模式：轮询 3s + 对账 60s → 最迟 60s 内全集群收敛（实际多数情况 3s 内）。
 - PostgreSQL / MongoDB 模式：轮询 3s + 对账 60s → 最迟 60s 内全集群收敛（实际多数情况 3s 内）。
 - Redis 模式：轮询 3s + 对账 60s → 最迟 60s 内全集群收敛（实际多数情况 3s 内）。
@@ -854,8 +984,9 @@ execute2Resp(chainId)
 
 - **`cache.capacity`**：按你的热点 chain 条数估，默认 500 够大多数应用。设小了频繁淘汰→频繁回源；设大了多吃堆内存。脚本没有独立容量参数——它跟 chain 联动淘汰（chain 被淘汰时，它引用的脚本引用计数减一，归零时一起清）。
 - **`cache.preload-chain-ids`**：把首屏/高 QPS 的关键 chain 列在这里，启动时立即拉取编译，抹平冷启动尖刺。非关键链路不必预热，懒加载就够了。
-- **`sync.poll-seconds`**（SQL / PostgreSQL / MongoDB / Redis）：觉得 3s 不够及时可调小（代价是更频繁的序号查询）；zk / etcd 用 watch，此项不生效。
+- **`sync.poll-seconds`**（SQL / PostgreSQL / MongoDB / Redis）：觉得 3s 不够及时可调小（代价是更频繁的序号查询）；zk / etcd 用 watch，Nacos 用 Listener，此项对它们不生效。
 - **`sync.reconcile-seconds`**：60s 是经验值，是「极端兜底」周期，调小意义不大、反而增加全量 diff 开销。
+- **Nacos Catalog 体积**：每次冷读取和对账都处理整份 Catalog。通过拆分 `application-name` 控制单应用规则量，并监控配置体积、冷加载耗时和发布冲突率；大 Catalog 不应仅靠增大服务端上限硬撑。
 
 ### 10.4 v1 实现注记：惰性失效
 
@@ -931,8 +1062,8 @@ GET /actuator/liteflow/ruledb
 | **启动时存储不可用** | `FlowExecutor` 初始化阶段拉取 manifest 失败会**直接抛异常、启动失败**（不会降级为空规则跑起来）。Rule-DB 模式的启动强依赖存储可用——和下面「运行期存储挂了」是两回事。 |
 | **运行期存储不可用，缓存命中** | 照常执行，完全不受影响。**这是核心可用性属性**——存储挂了不影响已缓存链路跑。（隐含前提：故障期间没有针对该 chain 的变更被应用；一旦变更把缓存态失效，就落入下一行「未命中」的语义。） |
 | **运行期存储不可用，缓存未命中** | fetch 按 `fetch-retry-times`（默认 3）重试，仍失败抛 `ChainLoadException`（区别于 `ChainNotFoundException`——前者是「规则存在但取不回来」，后者是「规则不存在」）。存储恢复后下次执行自动回源，无需干预。 |
-| **变更通道故障**（轮询报错 / watch 断线） | 标记 `DEGRADED` 并重试。SQL / PostgreSQL / MongoDB / Redis 轮询失败会在下个周期重试；zk / etcd 断线后重建监听并触发全量对账。断线窗口由周期对账兜底。 |
-| **change_log / changelog 被清理或损坏** | SQL / PostgreSQL 的 `seq` 是全表自增序号，不同 `application_name` 之间出现跳号是正常现象；MongoDB / Redis 则使用连续的应用级序号。当应用水位已前进却读不到变更，出现序号断档，或日志中的目标类型／操作无法解析时，对应后端会标记 `DEGRADED` 并立即请求全量对账。 |
+| **变更通道故障**（轮询报错 / watch 或 Listener 断线） | 标记 `DEGRADED` 并重试。SQL / PostgreSQL / MongoDB / Redis 轮询失败会在下个周期重试；zk / etcd 断线后重建监听并触发全量对账；Nacos 由客户端维护监听，回调损坏、序号断档或消费失败时请求全量对账。断线窗口由周期对账兜底。 |
+| **change_log / changelog 被清理或损坏** | SQL / PostgreSQL 的 `seq` 是全表自增序号，不同 `application_name` 之间出现跳号是正常现象；MongoDB / Redis 则使用连续的应用级序号。Nacos 不保留完整 changelog，只在 Catalog 中保留连续 sequence 和最后一条变更。当应用水位已前进却读不到变更，出现序号断档，或日志中的目标类型／操作无法解析时，对应后端会标记 `DEGRADED` 并立即请求全量对账。 |
 | **fetch 到 enable=false 或行/节点不存在** | 本次执行抛 `ChainLoadException`；下个对账周期该条目从索引移除，之后执行报 chain 不存在（`ChainNotFoundException` 语义）。 |
 | **变更已感知但回源新版失败** | v1 是惰性失效（见 [§10.4](#104-v1-实现注记惰性失效)）：变更到达即失效缓存态，之后每次执行都重试回源，成功前该 chain 执行失败（`ChainLoadException`）。**发布动作本身有小概率把可用的旧版换成暂不可用**——请避开存储抖动窗口发布。 |
 | **SQL 缺表且未开 `auto-init-table`** | 首次访问存储时报 `ConfigErrorException`，错误信息内含完整可复制执行的 DDL。 |
@@ -947,7 +1078,7 @@ GET /actuator/liteflow/ruledb
 
 1. **与 `rule-source` 互斥。** 同时配置 `liteflow.rule-source` 和 `liteflow.rule-db.*` 会启动直接报错。Rule-DB 和老插件模式不能混用。
 
-2. **六个 Rule-DB 插件同一时刻 classpath 只能有一个。** `liteflow-rule-db-sql` / `-postgresql` / `-mongodb` / `-redis` / `-zk` / `-etcd` 六选一。同时存在多个会启动报错要求只保留一个。
+2. **七个 Rule-DB 插件同一时刻 classpath 只能有一个。** `liteflow-rule-db-sql` / `-postgresql` / `-mongodb` / `-redis` / `-zk` / `-etcd` / `-nacos` 七选一。同时存在多个会启动报错要求只保留一个。
 
 3. **Redis Cluster 必须配置 `key-hash-tag`。** `RedisRulePublisher` 的 Lua 脚本会触碰 4 个键（`chain:{id}`、`chain-ids`、`seq`、`changelog`），多键 `EVAL` 要求这些键落在同一 slot，否则 Cluster 会以 `CROSSSLOT` 错误失败。模块已通过 hash-tag 支持：配置 `liteflow.rule-db.redis.key-hash-tag` 后，所有键按 `{prefix}:{hashTag}:{app}:...` 布局、固定到同一 slot，原子发布可正常工作。
    - **cluster 模式（多地址且无 `master-name`）**：`key-hash-tag` 为必填，未配置时建连直接抛 `ConfigErrorException`（fail-fast，不会带病启动）。
@@ -955,14 +1086,16 @@ GET /actuator/liteflow/ruledb
 
 4. **MongoDB 必须支持多文档事务。** 运行时的 Manifest 快照读取与 Publisher 都使用事务，因此只支持副本集或分片集群；standalone MongoDB 不受支持。
 
-5. **一致性语义是最终收敛、秒级窗口，不是原子切换/线性一致。** 见 [§9.3](#93-一致性语义务必读)。要求全集群同一逻辑时刻切版的场景，当前版本不满足。
+5. **Nacos 需要 Server 2.x，并受单配置容量约束。** 1.x 不提供本模块使用的 CAS 发布能力。一个 applicationName 的全部正文、元数据和最后变更记录位于同一 Catalog；实际可用上限同时受 Nacos 服务端 `nacos.core.config.max-size`、数据库字段和代理／网关限制。模块不自动分片，接近上限会导致发布失败；上线前必须按生产链路验证最大 Catalog，并为 JSON 与后续规则增长留足余量。
 
-6. **v1 不提供的实现（SPI 已就位、留作后续）：**
-   - nacos / apollo 的 Rule-DB 实现。`RuleRepository` SPI 在 core 里已经定义好，后续可按同一套契约扩展。
+6. **一致性语义是最终收敛、秒级窗口，不是原子切换/线性一致。** 见 [§9.3](#93-一致性语义务必读)。要求全集群同一逻辑时刻切版的场景，当前版本不满足。
+
+7. **v1 不提供的实现（SPI 已就位、留作后续）：**
+   - Apollo 的 Rule-DB 实现。`RuleRepository` SPI 在 core 里已经定义好，后续可按同一套契约扩展。
    - `enableChain/enableScript` API（停用目前靠直写存储，见 [§8.3](#83-停用enable0)）。
    - 节点实例 ID 持久化（旧 sql 插件的 `NodeInstanceIdManageSpi` 能力）。
    - 管理 UI / 控制台。v1 只提供 Publisher API 与写入规范。
 
-7. **并发发布语义。** 不传 `expectedVersion` 时是无条件 UPSERT；传 `expectedVersion=0` 表示“仅当不存在时创建”；传正数表示按版本做 CAS 更新。六个后端都保证成功发布的业务版本单调递增。
+8. **并发发布语义。** 不传 `expectedVersion` 时是无条件 UPSERT；传 `expectedVersion=0` 表示“仅当不存在时创建”；传正数表示按版本做 CAS 更新。七个后端都保证成功发布的业务版本单调递增。
 
-8. **手动 build 的 chain 可以与本模式共存，但 id 不要与存储中的 chain 撞车。** 通过 `LiteFlowChainELBuilder` 手动 build、且 id **不在**存储清单中的 chain 不受 Rule-DB 干预（对账只管理来源于清单的条目，不会把手写 chain 当成「存储中不存在」而删掉）。但如果手动 build 的 id 与存储中的 chain **相同**，懒加载／失效路径会用存储内容**覆盖**手动 build 的版本——撞车时以存储为准。请保证两边 id 集合不相交。
+9. **手动 build 的 chain 可以与本模式共存，但 id 不要与存储中的 chain 撞车。** 通过 `LiteFlowChainELBuilder` 手动 build、且 id **不在**存储清单中的 chain 不受 Rule-DB 干预（对账只管理来源于清单的条目，不会把手写 chain 当成「存储中不存在」而删掉）。但如果手动 build 的 id 与存储中的 chain **相同**，懒加载／失效路径会用存储内容**覆盖**手动 build 的版本——撞车时以存储为准。请保证两边 id 集合不相交。

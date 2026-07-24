@@ -61,6 +61,7 @@
 		<zkclient.version>0.10</zkclient.version>
 		<jetcd.version>0.7.3</jetcd.version>
 		<nacos.version>1.4.4</nacos.version>
+		<nacos-rule-db.version>2.5.3</nacos-rule-db.version>
 		<qlexpress.version>4.1.0</qlexpress.version>
 		<groovy.version>3.0.25</groovy.version>
 		<graaljs.groupId>org.graalvm.js</graaljs.groupId>
@@ -227,21 +228,6 @@
 				<groupId>io.etcd</groupId>
 				<artifactId>jetcd-core</artifactId>
 				<version>${jetcd.version}</version>
-			</dependency>
-			<dependency>
-				<groupId>com.alibaba.nacos</groupId>
-				<artifactId>nacos-client</artifactId>
-				<version>${nacos.version}</version>
-				<exclusions>
-					<exclusion>
-						<groupId>com.fasterxml.jackson.core</groupId>
-						<artifactId>jackson-databind</artifactId>
-					</exclusion>
-					<exclusion>
-						<groupId>com.fasterxml.jackson.core</groupId>
-						<artifactId>jackson-core</artifactId>
-					</exclusion>
-				</exclusions>
 			</dependency>
 			<dependency>
 				<groupId>com.alibaba</groupId>

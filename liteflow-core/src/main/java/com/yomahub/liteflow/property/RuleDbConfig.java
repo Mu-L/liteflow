@@ -28,6 +28,8 @@ public class RuleDbConfig {
 
 	private RuleDbZkConfig zk = new RuleDbZkConfig();
 
+	private RuleDbNacosConfig nacos = new RuleDbNacosConfig();
+
 	public Boolean getEnabled() {
 		return enabled;
 	}
@@ -106,5 +108,13 @@ public class RuleDbConfig {
 
 	public void setZk(RuleDbZkConfig zk) {
 		this.zk = zk;
+	}
+
+	public RuleDbNacosConfig getNacos() {
+		return nacos;
+	}
+
+	public void setNacos(RuleDbNacosConfig nacos) {
+		this.nacos = nacos;
 	}
 }
