@@ -1,6 +1,6 @@
 # LiteFlow Rule-DB 模式使用指南
 
-LiteFlow 的 Rule-DB 模式让规则和脚本**真正以 SQL 数据库 / PostgreSQL / MongoDB / Redis / ZooKeeper / etcd / Nacos 为权威源**，JVM 只保留轻量索引 + 有界缓存。它解决了原有 6 个规则插件「启动拼一份大 XML、规则全量常驻堆内存、多节点各跑各的没有一致性保证」的本质痛点：多节点能在秒级窗口内收敛到同一版本，且 JVM 内存占用与规则总量解耦。
+LiteFlow 的 Rule-DB 模式让规则和脚本**真正以 SQL 数据库 / PostgreSQL / MongoDB / Redis / ZooKeeper / etcd / Nacos 为权威源**。JVM 常驻规则清单、影子 `Chain` / `Node` 和状态索引，EL／脚本正文及编译产物进入有界缓存。它解决了原有 6 个规则插件「启动拼一份大 XML、规则正文全量常驻堆内存、多节点各跑各的没有一致性保证」的本质痛点：多节点能在秒级窗口内收敛到同一版本，且重内容的常驻规模由缓存容量控制。规则元数据仍随规则总量线性增长，容量边界见 [§10](#10-内存与性能)。
 
 本文分两部分：
 
@@ -41,7 +41,7 @@ Rule-DB 模式把这两件事一次性解决：
    - **SQL / PostgreSQL / MongoDB / Redis**：seq 序号轮询（默认 3s 一次）。
    - **ZooKeeper / etcd / Nacos**：长连接监听实时推送（毫秒级或亚秒级）。
    - 七者都叠加一条 **周期全量对账**（默认 60s）作为最终兜底。
-2. **JVM 内存占用与规则总量解耦。** 常驻内存的只有「id → 版本戳 + 轻量元数据」索引；EL 文本、脚本源码、编译产物全部进**有界缓存**（容量按 chain 条数配），按 LRU 淘汰，淘汰后退回「影子」状态，下次执行再懒加载。
+2. **规则正文与编译产物不再全量常驻。** JVM 仍为每条清单记录维护影子 `Chain` / `Node`、版本戳和状态索引，这部分开销随规则总数线性增长；EL 文本、脚本源码和编译产物进入 **Caffeine 有界缓存**（容量按 chain 条数配），按访问热度淘汰，淘汰后退回「影子」状态，下次执行再懒加载。
 
 一句话划清边界：**老的 6 个插件 = 启动一次性灌库，之后各节点各跑各的；Rule-DB = 存储永远是权威，JVM 只缓存热规则，所有节点最终一致。**
 
@@ -71,6 +71,8 @@ Rule-DB 模式把这两件事一次性解决：
 
 > Spring Boot 4 项目把 starter 换成 `liteflow-spring-boot4-starter`；Solon 项目用 `liteflow-solon-plugin`。Spring Boot 两个 starter（`liteflow-spring-boot-starter` / `liteflow-spring-boot4-starter`）已内置 `liteflow.rule-db.*` 配置绑定与 IDE 自动补全元数据；Solon 插件支持配置绑定，但**不携带** Spring 风格的 IDE 元数据文件。
 
+> 发布脚本时，执行应用还必须引入对应语言的 LiteFlow 脚本插件。例如 `language("groovy")` 需要 `com.yomahub:liteflow-script-groovy:2.16.1`。Rule-DB 后端模块和 starter 都不会自动引入任何脚本语言实现；只发布普通 chain 时不需要脚本插件。
+
 ### Step 2：写配置（三种姿势，按需选最省事的）
 
 **姿势 A：应用已有 DataSource（最省事，零配置）。** 你的 Spring Boot 应用里已经配了数据库连接池（HikariDataSource 等），那只要引依赖、什么都别配——插件会自动复用容器里的 DataSource，`application-name` 自动取 `spring.application.name`。
@@ -78,6 +80,7 @@ Rule-DB 模式把这两件事一次性解决：
 **姿势 B：规则放独立数据库（三行起步）。** 规则想和应用业务库分开，配三行：
 
 ```properties
+spring.application.name=order-service
 liteflow.rule-db.sql.url=jdbc:mysql://host:3306/liteflow_rules
 liteflow.rule-db.sql.username=root
 liteflow.rule-db.sql.password=your-password
@@ -95,37 +98,62 @@ liteflow.rule-db.sql.auto-init-table=true
 
 ### Step 3：发布第一条规则
 
-用发布 API 写入规则。SQL 插件提供了一个**简化门面** `SqlRulePublisher`，最常用场景一行搞定（[统一发布 API](#81-推荐统一发布-api) 支持更多能力，见参考篇）：
-
-> **非 Spring 环境**：`SqlRulePublisher` 的无参构造通过 `LiteflowConfigGetter.get().getRuleDb()` 读取全局 `liteflow.rule-db.*` 配置。在非 Spring 的管理后台里，需先加载/初始化好 `liteflow.rule-db.*` 配置（填充 `LiteflowConfig`）才能调用 `new SqlRulePublisher()` + 发布 API，否则会因读不到 `RuleDbConfig` 而 NPE / 抛 `ConfigErrorException`。若不想依赖全局 `LiteflowConfig`，用 [统一发布 API](#81-推荐统一发布-api) 传 `SqlPublisherConfig`（可直接传一个 `DataSource`），更适合独立管理后台。
+用统一发布 API 写入规则。`applicationName` 是存储隔离维度，必须与执行应用最终解析出的 `liteflow.rule-db.application-name` 一致；下面使用独立 JDBC 配置，管理后台也可以通过 `SqlPublisherConfig.dataSource(...)` 复用自己的连接池。
 
 ```java
-import com.yomahub.liteflow.repository.sql.SqlRulePublisher;
+import com.yomahub.liteflow.publisher.PublishChainRequest;
+import com.yomahub.liteflow.publisher.PublishResult;
+import com.yomahub.liteflow.publisher.RulePublisher;
+import com.yomahub.liteflow.publisher.RulePublisherFactory;
+import com.yomahub.liteflow.repository.sql.SqlPublisherConfig;
 
-SqlRulePublisher publisher = new SqlRulePublisher();
-// 发布一条 chain（UPSERT 语义：已存在则 version+1 更新，不存在则新增 version=1）
-long version = publisher.publishChain("orderChain",
-        "THEN(a, b, IF(c, d, e))");
-System.out.println("发布成功，当前版本: " + version);
-
-// 发布脚本节点。若 chain 引用脚本，建议【先发脚本、再发引用它的 chain】——
-// 反过来的话，别的节点可能在两次发布之间的收敛窗口内拉到新 chain 却找不到脚本，编译瞬时失败
-import com.yomahub.liteflow.repository.vo.ScriptRecord;
-ScriptRecord script = new ScriptRecord();
-script.setNodeId("s1");
-script.setScript("def a = 1; return a");
-script.setType("script");          // 对齐 NodeTypeEnum：script/boolean_script/switch_script/...
-script.setLanguage("groovy");       // 为空则用全局默认
-publisher.publishScript(script);
-
-// 删除
-publisher.removeChain("orderChain");
-publisher.removeScript("s1");
+try (RulePublisher publisher = RulePublisherFactory.create(
+        SqlPublisherConfig.builder()
+                .applicationName("order-service")
+                .url("jdbc:mysql://host:3306/liteflow_rules")
+                .username("root")
+                .password("your-password")
+                .build())) {
+    PublishResult result = publisher.publishChain(PublishChainRequest.builder()
+            .chainId("orderChain")
+            .el("THEN(a, b)")
+            .expectedVersion(0L) // 仅当规则不存在时创建；重复执行会明确报版本冲突
+            .build());
+    System.out.println("发布成功，当前版本: " + result.getVersion());
+}
 ```
 
-> **EL 里的 `a`、`b`、`c` 是什么？** 是你应用里已注册的普通 Java 组件（继承 `NodeComponent` 的 `@LiteflowComponent`/`@Component` bean）。Rule-DB 只纳管 **EL 和脚本**，Java 组件照旧写在应用代码里、随应用部署——发布的 EL 引用了不存在的组件，执行时会报编译错误。
+EL 里的 `a`、`b` 是应用内注册的普通 Java 组件。下面两个最小组件分别放入 `ACmp.java` 和 `BCmp.java`，即可跑通本例：
 
-每次 `publish*` 都在一个**单事务**里原子完成：UPSERT 内容行（`version = version + 1`，重算 md5）+ INSERT 变更日志。返回值就是新的版本号。
+```java
+import com.yomahub.liteflow.annotation.LiteflowComponent;
+import com.yomahub.liteflow.core.NodeComponent;
+
+@LiteflowComponent("a")
+public class ACmp extends NodeComponent {
+    @Override
+    public void process() {
+        System.out.println("a");
+    }
+}
+```
+
+```java
+import com.yomahub.liteflow.annotation.LiteflowComponent;
+import com.yomahub.liteflow.core.NodeComponent;
+
+@LiteflowComponent("b")
+public class BCmp extends NodeComponent {
+    @Override
+    public void process() {
+        System.out.println("b");
+    }
+}
+```
+
+Rule-DB 只纳管 **EL 和脚本**，Java 组件仍随应用代码部署。Publisher 只校验请求字段和存储约束，不会在发布时编译 EL；引用不存在的 Java 组件、子 chain 或脚本节点，会在执行节点首次编译该 chain 时失败。脚本发布和依赖顺序见 [§8.6](#86-发布校验与依赖顺序)。
+
+统一 SQL Publisher 的每次 `publish*` 都在一个**单事务**里先获取 `lf_change_lock` 发布顺序锁，再完成 UPSERT 内容行（`version = version + 1`，重算 md5）和 INSERT 变更日志。锁会持有到提交或回滚，确保变更序号分配顺序与事务提交顺序一致。
 
 ### Step 4：执行
 
@@ -141,7 +169,7 @@ public void run() {
 }
 ```
 
-启动时只读清单（不含内容）建索引，真正的 EL/脚本内容是**首次执行到时才回源拉取并编译**。命中缓存之后执行热路径零远程调用，和原来一样快。
+启动时只读清单（不含内容）建索引，普通 chain 的 EL／脚本内容是**首次执行到时才回源拉取并编译**。命中缓存之后执行热路径零远程调用；路由执行会预先准备所有未就绪 chain 的 route 元数据，冷启动边界见 [§10.3](#103-调优建议)。
 
 ## 3. 快速上手（Redis）
 
@@ -169,6 +197,7 @@ public void run() {
 **姿势 B：一行起步。**
 
 ```properties
+spring.application.name=your-app
 liteflow.rule-db.redis.address=redis://127.0.0.1:6379
 # 多地址逗号分隔；哨兵模式再加 master-name；集群只填多地址、不配 master-name
 # application-name 留空，自动取 spring.application.name
@@ -189,37 +218,38 @@ import com.yomahub.liteflow.publisher.PublishScriptRequest;
 import com.yomahub.liteflow.publisher.RemoveRuleRequest;
 import com.yomahub.liteflow.repository.redis.RedisPublisherConfig;
 
-RulePublisher publisher = RulePublisherFactory.create(
+try (RulePublisher publisher = RulePublisherFactory.create(
         RedisPublisherConfig.builder()
                 .address("redis://127.0.0.1:6379")
                 .applicationName("your-app")   // 多应用共库时务必各应用不同
-                .build());
+                .build())) {
 
-// 发布 chain。route / namespace 可选（见下）
-long version = publisher.publishChain(PublishChainRequest.builder()
-        .chainId("orderChain")
-        .el("THEN(a, b, IF(c, d, e))")
-        .build()).getVersion();
+    // 发布 chain。route / namespace 可选（见下）
+    long version = publisher.publishChain(PublishChainRequest.builder()
+            .chainId("orderChain")
+            .el("THEN(a, b)")
+            .build()).getVersion();
 
-// 带 route（路由 EL）和 namespace 的发布
-publisher.publishChain(PublishChainRequest.builder()
-        .chainId("orderChain")
-        .el("THEN(a, b)")
-        .route("AND(a)")
-        .namespace("ns1")
-        .build());
+    // 带 route（路由 EL）和 namespace 的发布
+    publisher.publishChain(PublishChainRequest.builder()
+            .chainId("orderChain")
+            .el("THEN(a, b)")
+            .route("AND(a)")
+            .namespace("ns1")
+            .build());
 
-// 发布脚本
-publisher.publishScript(PublishScriptRequest.builder()
-        .nodeId("s1")
-        .type("script")
-        .language("groovy")
-        .script("def a = 1; return a")
-        .build());
+    // 发布脚本；执行节点还需引入对应语言的脚本插件
+    publisher.publishScript(PublishScriptRequest.builder()
+            .nodeId("s1")
+            .type("script")
+            .language("groovy")
+            .script("def a = 1; return a")
+            .build());
 
-// 删除
-publisher.removeChain(RemoveRuleRequest.builder().targetId("orderChain").build());
-publisher.removeScript(RemoveRuleRequest.builder().targetId("s1").build());
+    // 删除
+    publisher.removeChain(RemoveRuleRequest.builder().targetId("orderChain").build());
+    publisher.removeScript(RemoveRuleRequest.builder().targetId("s1").build());
+}
 ```
 
 每次发布都是一段 **Lua 脚本原子执行**：HSET 内容 → SADD 索引 → INCR seq → ZADD changelog，四步在 Redis 单线程内原子完成，不会有中间状态被其他客户端看到。返回值（`PublishResult`）含新版本号和变更序号。
@@ -252,6 +282,7 @@ zk / etcd / Nacos 与 SQL / PostgreSQL / MongoDB / Redis 的区别在于：前�
 ### Step 2：写配置
 
 ```properties
+spring.application.name=your-app
 liteflow.rule-db.zk.connect-string=127.0.0.1:2181
 # 多个地址逗号分隔
 liteflow.rule-db.zk.root-path=/liteflow        # 默认 /liteflow
@@ -267,17 +298,18 @@ import com.yomahub.liteflow.publisher.RulePublisherFactory;
 import com.yomahub.liteflow.publisher.PublishChainRequest;
 import com.yomahub.liteflow.repository.zk.ZkPublisherConfig;
 
-RulePublisher publisher = RulePublisherFactory.create(
+try (RulePublisher publisher = RulePublisherFactory.create(
         ZkPublisherConfig.builder()
                 .connectString("127.0.0.1:2181")
                 .rootPath("/liteflow")
                 .applicationName("your-app")
-                .build());
+                .build())) {
 
-publisher.publishChain(PublishChainRequest.builder()
-        .chainId("orderChain")
-        .el("THEN(a, b)")
-        .build());
+    publisher.publishChain(PublishChainRequest.builder()
+            .chainId("orderChain")
+            .el("THEN(a, b)")
+            .build());
+}
 ```
 
 每次发布在**一个 ZooKeeper 事务**（multi-op）内原子完成 meta 节点 + content 节点的写入；节点 `version`（zxid）作变更序号。zk 连接断线/重连时，watch 自动补订阅并触发一次全量对账。
@@ -295,6 +327,11 @@ publisher.publishChain(PublishChainRequest.builder()
 ```xml
 <dependency>
     <groupId>com.yomahub</groupId>
+    <artifactId>liteflow-spring-boot-starter</artifactId>
+    <version>2.16.1</version>
+</dependency>
+<dependency>
+    <groupId>com.yomahub</groupId>
     <artifactId>liteflow-rule-db-etcd</artifactId>
     <version>2.16.1</version>
 </dependency>
@@ -303,6 +340,7 @@ publisher.publishChain(PublishChainRequest.builder()
 ### Step 2：写配置
 
 ```properties
+spring.application.name=your-app
 liteflow.rule-db.etcd.endpoints=http://127.0.0.1:2379
 # 多个 endpoint 逗号分隔
 liteflow.rule-db.etcd.root-path=/liteflow       # 默认 /liteflow
@@ -313,19 +351,23 @@ liteflow.rule-db.etcd.root-path=/liteflow       # 默认 /liteflow
 ### Step 3：发布第一条规则
 
 ```java
+import com.yomahub.liteflow.publisher.PublishChainRequest;
+import com.yomahub.liteflow.publisher.RulePublisher;
+import com.yomahub.liteflow.publisher.RulePublisherFactory;
 import com.yomahub.liteflow.repository.etcd.EtcdPublisherConfig;
 
-RulePublisher publisher = RulePublisherFactory.create(
+try (RulePublisher publisher = RulePublisherFactory.create(
         EtcdPublisherConfig.builder()
                 .endpoints("http://127.0.0.1:2379")
                 .rootPath("/liteflow")
                 .applicationName("your-app")
-                .build());
+                .build())) {
 
-publisher.publishChain(PublishChainRequest.builder()
-        .chainId("orderChain")
-        .el("THEN(a, b)")
-        .build());
+    publisher.publishChain(PublishChainRequest.builder()
+            .chainId("orderChain")
+            .el("THEN(a, b)")
+            .build());
+}
 ```
 
 etcd 用 **KV revision** 作变更序号，watch 按 revision 区间订阅。etcd 对历史 revision 有 compaction 上限——一旦 watch 因 revision 被 compact 而失败，会自动降级为全量对账后重新续上 watch。
@@ -336,9 +378,25 @@ etcd 用 **KV revision** 作变更序号，watch 按 revision 区间订阅。etc
 
 ## 5.1 快速上手（PostgreSQL）
 
-引入 `liteflow-rule-db-postgresql`，配置独立 JDBC 地址；如果容器中已有 `DataSource`，也可以省略连接配置并自动复用：
+引入 starter 和 PostgreSQL 后端模块：
+
+```xml
+<dependency>
+    <groupId>com.yomahub</groupId>
+    <artifactId>liteflow-spring-boot-starter</artifactId>
+    <version>2.16.1</version>
+</dependency>
+<dependency>
+    <groupId>com.yomahub</groupId>
+    <artifactId>liteflow-rule-db-postgresql</artifactId>
+    <version>2.16.1</version>
+</dependency>
+```
+
+配置独立 JDBC 地址；如果容器中已有 `DataSource`，也可以省略连接配置并自动复用：
 
 ```properties
+spring.application.name=your-app
 liteflow.rule-db.postgresql.url=jdbc:postgresql://127.0.0.1:5432/liteflow
 liteflow.rule-db.postgresql.username=postgres
 liteflow.rule-db.postgresql.password=your-password
@@ -348,24 +406,46 @@ liteflow.rule-db.postgresql.auto-init-table=true
 独立发布程序使用 `PostgresqlPublisherConfig`：
 
 ```java
-RulePublisher publisher = RulePublisherFactory.create(
+import com.yomahub.liteflow.publisher.PublishChainRequest;
+import com.yomahub.liteflow.publisher.RulePublisher;
+import com.yomahub.liteflow.publisher.RulePublisherFactory;
+import com.yomahub.liteflow.repository.postgresql.PostgresqlPublisherConfig;
+
+try (RulePublisher publisher = RulePublisherFactory.create(
         PostgresqlPublisherConfig.builder()
                 .applicationName("your-app")
                 .url("jdbc:postgresql://127.0.0.1:5432/liteflow")
                 .username("postgres")
                 .password("your-password")
-                .build());
-publisher.publishChain(PublishChainRequest.builder()
-        .chainId("orderChain").el("THEN(a, b)").build());
+                .build())) {
+    publisher.publishChain(PublishChainRequest.builder()
+            .chainId("orderChain").el("THEN(a, b)").build());
+}
 ```
 
 PostgreSQL 使用数据库事务原子提交内容、业务版本和 `change_log`，变更通过 seq 轮询加周期对账收敛。
 
 ## 5.2 快速上手（MongoDB）
 
-引入 `liteflow-rule-db-mongodb`，配置 MongoDB URI；容器中已有 `MongoClient` bean 时可以不配 URI：
+引入 starter 和 MongoDB 后端模块：
+
+```xml
+<dependency>
+    <groupId>com.yomahub</groupId>
+    <artifactId>liteflow-spring-boot-starter</artifactId>
+    <version>2.16.1</version>
+</dependency>
+<dependency>
+    <groupId>com.yomahub</groupId>
+    <artifactId>liteflow-rule-db-mongodb</artifactId>
+    <version>2.16.1</version>
+</dependency>
+```
+
+配置 MongoDB URI；容器中已有 `MongoClient` bean 时可以不配 URI：
 
 ```properties
+spring.application.name=your-app
 liteflow.rule-db.mongodb.uri=mongodb://127.0.0.1:27017/?replicaSet=rs0
 liteflow.rule-db.mongodb.database=liteflow
 ```
@@ -373,14 +453,20 @@ liteflow.rule-db.mongodb.database=liteflow
 独立发布程序使用 `MongoPublisherConfig`：
 
 ```java
-RulePublisher publisher = RulePublisherFactory.create(
+import com.yomahub.liteflow.publisher.PublishChainRequest;
+import com.yomahub.liteflow.publisher.RulePublisher;
+import com.yomahub.liteflow.publisher.RulePublisherFactory;
+import com.yomahub.liteflow.repository.mongodb.MongoPublisherConfig;
+
+try (RulePublisher publisher = RulePublisherFactory.create(
         MongoPublisherConfig.builder()
                 .applicationName("your-app")
                 .uri("mongodb://127.0.0.1:27017/?replicaSet=rs0")
                 .database("liteflow")
-                .build());
-publisher.publishChain(PublishChainRequest.builder()
-        .chainId("orderChain").el("THEN(a, b)").build());
+                .build())) {
+    publisher.publishChain(PublishChainRequest.builder()
+            .chainId("orderChain").el("THEN(a, b)").build());
+}
 ```
 
 MongoDB 后端使用多文档事务原子发布规则，并使用快照事务读取一致的 Manifest 和序号基线，因此整个后端都要求**副本集或分片集群**；standalone MongoDB 不受支持。
@@ -394,6 +480,11 @@ Nacos Rule-DB 依赖 `publishConfigCas` 保证并发发布的原子性，因此�
 ```xml
 <dependency>
     <groupId>com.yomahub</groupId>
+    <artifactId>liteflow-spring-boot-starter</artifactId>
+    <version>2.16.1</version>
+</dependency>
+<dependency>
+    <groupId>com.yomahub</groupId>
     <artifactId>liteflow-rule-db-nacos</artifactId>
     <version>2.16.1</version>
 </dependency>
@@ -402,6 +493,7 @@ Nacos Rule-DB 依赖 `publishConfigCas` 保证并发发布的原子性，因此�
 ### Step 2：写配置
 
 ```properties
+spring.application.name=order-service
 liteflow.rule-db.nacos.server-addr=127.0.0.1:8848
 # namespace 填命名空间 ID，不是显示名称；留空使用 public
 # liteflow.rule-db.nacos.namespace=your-namespace-id
@@ -466,7 +558,7 @@ try (RulePublisher publisher = RulePublisherFactory.create(
 |---|---|---|
 | `liteflow.rule-db.enabled` | `true` | 引入依赖即激活；这是逃生开关，设 `false` 则退回非 Rule-DB 行为。 |
 | `liteflow.rule-db.application-name` | Spring Boot 应用自动取 `spring.application.name` | 多应用共库的隔离维度。同一套存储里不同 `application-name` 的规则互不可见。非 Spring / Solon 环境或未配 `spring.application.name` 时回落为 `default`——**多应用共库时务必保证各应用取值不同**，否则会互相读写对方的规则。 |
-| `liteflow.rule-db.cache.capacity` | `500` | 有界缓存容量（按 chain 条数计）。超出按 LRU 淘汰，淘汰的 chain 退回影子状态，其引用的脚本引用计数减一。 |
+| `liteflow.rule-db.cache.capacity` | `500` | Caffeine 有界缓存容量（按 chain 条数计）。超出后按访问热度淘汰，淘汰的 chain 退回影子状态，其引用的脚本引用计数减一。 |
 | `liteflow.rule-db.cache.preload-chain-ids` | 空 | 启动预热的 chain id 列表（逗号分隔）。关键链路建议列在这里，抹平冷启动的首次回源尖刺。预热失败只记一条 warn、不会阻断启动。 |
 | `liteflow.rule-db.sync.poll-seconds` | `3`（SQL / PostgreSQL / MongoDB / Redis） | 变更序号轮询周期；zk / etcd / Nacos 用监听，该项对它们不生效。 |
 | `liteflow.rule-db.sync.reconcile-seconds` | `60` | 清单对账周期，全量 diff 索引与缓存。无论通知还是轮询都丢了的极端情况下，这个周期是收敛的最终保证。 |
@@ -640,7 +732,7 @@ DDL 随 `liteflow-rule-db-sql` 模块提供：[`liteflow-rule-db/liteflow-rule-d
 
 该锁把 change log 序号的分配顺序与发布事务的提交顺序对齐，避免并发事务先拿到较小 seq 却后提交，导致轮询节点越过尚未提交的变更。它是整套表的全局锁，不按 `application_name` 拆分。
 
-`change_log` 允许运维定期清理（建议保留 7 天）。节点发现自己的 `lastAppliedSeq` 已小于表中最小 `seq`（断档）时，自动触发一次全量对账，清理不影响正确性。
+`change_log` 允许运维定期清理（建议保留 7 天），但 SQL / PostgreSQL 使用跨应用共享的全局序号，运行时不会通过查询 `MIN(seq)` 判断每一个缺口。水位前进却读不到本应用记录时会请求全量对账；如果裁剪后仍能读到更晚的本应用记录，缺失变化可能要等下一次周期对账才补齐。因此清理不破坏最终正确性，但可能让个别节点失去 seq 轮询的快速收敛路径；清理窗口应明显大于节点最长离线时间，并保留周期对账。
 
 #### 已有 SQL 部署升级
 
@@ -791,20 +883,21 @@ Publisher 使用当前 Nacos 配置 MD5 作为 CAS 条件，整体替换 Catalog
 
 ```java
 // 以 Redis 为例；其他后端换成对应的 XxxPublisherConfig
-RulePublisher publisher = RulePublisherFactory.create(
+try (RulePublisher publisher = RulePublisherFactory.create(
         RedisPublisherConfig.builder()
                 .address("redis://127.0.0.1:6379")
                 .applicationName("your-app")
-                .build());
+                .build())) {
 
-PublishResult r = publisher.publishChain(PublishChainRequest.builder()
-        .chainId("orderChain")
-        .el("THEN(a, b)")
-        .route("AND(a)")          // 可选：路由 EL
-        .namespace("ns1")         // 可选：命名空间
-        .build());
-r.getVersion();   // 新版本号
-r.getSequence();  // 变更序号（SQL/PostgreSQL/MongoDB/Redis/Nacos seq，zk zxid，etcd revision）
+    PublishResult r = publisher.publishChain(PublishChainRequest.builder()
+            .chainId("orderChain")
+            .el("THEN(a, b)")
+            .route("AND(a)")          // 可选：路由 EL
+            .namespace("ns1")         // 可选：命名空间
+            .build());
+    r.getVersion();   // 新版本号
+    r.getSequence();  // 变更序号（SQL/PostgreSQL/MongoDB/Redis/Nacos seq，zk zxid，etcd revision）
+}
 ```
 
 三个请求类型都是不可变 builder 对象，另外返回一个 `PublishResult`：
@@ -813,6 +906,8 @@ r.getSequence();  // 变更序号（SQL/PostgreSQL/MongoDB/Redis/Nacos seq，zk 
 - `PublishScriptRequest`：`nodeId` / `script` / `name`(可空) / `type`（`script`/`boolean_script`/`switch_script`/`for_script`） / `language`(可空) / `expectedVersion`(可空)。发布时框架自算 md5，`version` 由存储层自增。
 - `RemoveRuleRequest`：`targetId` / `expectedVersion`(可空)。`removeChain` / `removeScript` 共用。
 - 返回 `PublishResult`：`targetId` / `targetType` / `operation`(`UPSERT`/`DELETE`) / `version` / `sequence`。
+
+发布脚本只负责保存源码和语言标识；每个执行应用都必须显式引入对应的 `liteflow-script-*` 插件，否则该脚本首次加载时会失败。
 
 **乐观锁 `expectedVersion`（并发安全发布的关键）：**
 
@@ -826,17 +921,19 @@ r.getSequence();  // 变更序号（SQL/PostgreSQL/MongoDB/Redis/Nacos seq，zk 
 
 **事务/原子性保证：**
 
-- **SQL**：单事务内完成 UPSERT 内容行 + INSERT change_log，回滚一起回滚。
-- **PostgreSQL**：单事务内完成 UPSERT 内容行 + INSERT change_log，并用 `RETURNING seq` 返回提交序号。
+- **SQL**：单事务内先锁定 `change_lock.lock_id = 1`，再完成 UPSERT 内容行 + INSERT change_log，回滚一起回滚。
+- **PostgreSQL**：单事务内先锁定 `change_lock.lock_id = 1`，再完成 UPSERT 内容行 + INSERT change_log，并用 `RETURNING seq` 返回提交序号。
 - **MongoDB**：多文档事务内完成内容 CAS、sequence 自增和 change_log 插入。
 - **Redis**：一段 Lua 脚本在 Redis 单线程内原子完成 HSET 内容 → SADD 索引 → INCR seq → ZADD changelog，四步要么全成要么全不成，中间状态不可见。
 - **zk**：一个 multi-op 事务内原子写 meta + content znode。
 - **etcd**：一个事务（Txn）内原子写 meta + content key。
 - **Nacos**：读取当前 Catalog 后以其 MD5 为条件执行 CAS，原子替换正文、业务版本、sequence 和 `lastChange`；并发 CAS 失败会重新读取后重试，最多 8 次。
 
-### 8.2 SQL 简化门面（便捷快捷方式）
+### 8.2 SQL 兼容门面（不推荐新代码使用）
 
-SQL 额外提供一个门面 `com.yomahub.liteflow.repository.sql.SqlRulePublisher`，无参构造从全局 `LiteflowConfig` 取连接配置，省去 builder 样板：
+SQL 模块仍保留 `com.yomahub.liteflow.repository.sql.SqlRulePublisher`。它的无参构造从全局 `LiteflowConfig` 取连接配置，但不支持 route / namespace / expectedVersion，也没有统一 Publisher 的 `change_lock` 发布顺序协议。它不能作为多节点或并发发布场景的生产写入入口；2.16.1 的新代码和管理后台必须使用 [§8.1](#81-推荐统一发布-api) 的 `RulePublisherFactory` + `SqlPublisherConfig`。
+
+下面代码只用于识别和迁移旧调用，不建议新增：
 
 ```java
 SqlRulePublisher publisher = new SqlRulePublisher();
@@ -846,7 +943,7 @@ publisher.removeChain("orderChain");
 publisher.removeScript("s1");
 ```
 
-它只暴露最常用的双参/单参重载，**不支持** route / namespace / expectedVersion。其他后端统一走 [§8.1](#81-推荐统一发布-api)。
+迁移时把连接参数放入 `SqlPublisherConfig`，并把 `ScriptRecord` 转成 `PublishScriptRequest`。统一 Publisher 会执行完整的事务、顺序锁和版本冲突协议。
 
 ### 8.3 停用（enable=0）
 
@@ -867,12 +964,13 @@ v1 的 Publisher **没有** `enableChain/enableScript` API（留作后续）。�
 
 **SQL 直写规范**（一个事务内完成）：
 
-1. UPSERT `lf_chain` / `lf_script` 行：`version = version + 1`（行锁下原子自增，**不要**先 SELECT 再 Java +1，并发发布会丢更新），重算并写入 `content_md5`（**chain = `MD5(el_data)`，不含 route_data；script = `MD5(script_data)`**，必须与 Publisher 的算法一致，否则会产生虚假对账 diff）。
-2. `INSERT INTO lf_change_log (application_name, target_type, target_id, op, version) VALUES (...)`。
-3. 提交事务（回滚要一起回滚）。
-4. 删除场景：DELETE 内容行 + INSERT 一条 `op=DELETE` 的 change_log，同样一个事务。
+1. 事务开始后先执行 `SELECT lock_id FROM lf_change_lock WHERE lock_id = 1 FOR UPDATE`，并持锁到提交或回滚。自定义表前缀时同步替换表名；不要按 `application_name` 拆锁。
+2. UPSERT `lf_chain` / `lf_script` 行：`version = version + 1`（行锁下原子自增，**不要**先 SELECT 再 Java +1，并发发布会丢更新），重算并写入 `content_md5`（**chain = `MD5(el_data)`，不含 route_data；script = `MD5(script_data)`**，必须与 Publisher 的算法一致，否则会产生虚假对账 diff）。
+3. `INSERT INTO lf_change_log (application_name, target_type, target_id, op, version) VALUES (...)`。
+4. 提交事务（回滚要一起回滚）。
+5. 删除场景：获取同一顺序锁后，DELETE 内容行 + INSERT 一条 `op=DELETE` 的 change_log，仍在同一个事务内完成。
 
-PostgreSQL 直写遵循同一事务协议；MongoDB 直写必须在一个多文档事务内完成正文 CAS、`lf_sequence` 自增和 `lf_change_log` 插入。standalone MongoDB 无法满足该协议。
+PostgreSQL 直写遵循同一事务协议，同样先 `SELECT ... FROM lf_change_lock ... FOR UPDATE`；MongoDB 直写必须在一个多文档事务内完成正文 CAS、`lf_sequence` 自增和 `lf_change_log` 插入。standalone MongoDB 无法满足该协议。
 
 **Redis 直写规范**：必须用一段 Lua 脚本完成 HSET 内容 → SADD 索引 → INCR seq → ZADD changelog 四步（脚本可参考 [`lua/publish-chain.lua`](../liteflow-rule-db/liteflow-rule-db-redis/src/main/resources/lua/publish-chain.lua)），**不能用普通命令拼**——拼出来在多命令之间存在竞态，可能让别的客户端读到「内容已更新但 seq 没推」的中间态。
 
@@ -904,6 +1002,16 @@ WHERE application_name = 'your-app' AND chain_id = 'chain1';
 这是兜底，**不是**鼓励绕过规范——规范路径才是快路径。
 
 Nacos 是例外：它每次读取都会对 Catalog 内的正文重新计算 MD5 并校验，指纹不匹配会直接拒绝整份 Catalog；仍然不能绕过 Publisher 修改，原因见 §8.4。
+
+### 8.6 发布校验与依赖顺序
+
+Publisher 保证的是**单个目标的存储原子性和版本并发控制**，不负责解析或编译业务规则：
+
+- 它会校验必填字段、长度、后端键名等存储约束，但不会校验 EL 语法，也不会确认 Java 组件、子 chain 或脚本节点已经存在。
+- 一次 API 调用只原子发布一个 chain 或 script。当前没有把多条相互依赖规则作为 bundle 同时切换的事务 API；多次调用之间始终存在最终一致性窗口。
+- 新增或升级依赖时，按「脚本／叶子子 chain → 引用它们的父 chain」发布；删除时反向操作，先移除父 chain 对依赖的引用，再删除脚本或子 chain。
+- 发布前应在隔离环境使用与生产相同的 Java 组件和脚本插件执行冷加载测试。管理后台收到 `PublishResult` 只表示存储写入成功，不表示所有执行节点已经编译成功。
+- 回滚应把已验证的旧正文作为**新版本**重新发布，不能把存储中的 `version` 直接改小。已存在成功版本时，新版本加载失败会保留 last-good generation 继续服务，具体状态见 [§12](#12-降级语义)。
 
 ---
 
@@ -937,7 +1045,7 @@ zk / etcd / Nacos 使用长连接监听，轮询腿对它们不生效；SQL / Po
 - PostgreSQL / MongoDB 模式：轮询 3s + 对账 60s → 最迟 60s 内全集群收敛（实际多数情况 3s 内）。
 - Redis 模式：轮询 3s + 对账 60s → 最迟 60s 内全集群收敛（实际多数情况 3s 内）。
 
-版本号单调递增，**不会新旧回跳**：变更通知按版本号做幂等保护，迟到的旧版本通知会被忽略，不会把已收敛的新版打回旧版。
+同一条记录从创建到删除期间，业务版本单调递增；变更通知按版本和内容指纹做幂等保护，迟到的旧通知不会把已激活版本打回旧版。**删除后使用相同 id 重建属于新的记录，版本会重新从 1 开始**，不能把它理解为原记录继续递增。备份恢复若会降低业务版本，必须按 [§14.2](#142-备份恢复) 的流程处理。
 
 > **只发脚本、不发 chain 也会收敛。** 脚本新版发布后，**所有**引用该脚本的已编译 chain（含多条 chain 共享同一脚本的场景）都会在收敛窗口内切到新脚本，无需重发 chain。这是脚本级变更的常规姿势。
 
@@ -957,11 +1065,12 @@ Rule-DB 提供的是**最终一致性、秒级收敛窗口**，**不是**原子�
 
 | 数据 | 位置 | 何时驻留 |
 |---|---|---|
-| **版本戳索引**（`chainId → version`、`nodeId → version + 元数据`） | JVM 常驻 | 整个生命周期；这是常驻开销，条目非常小 |
-| **EL 文本 + 编译后的条件树** | JVM 有界缓存 | 命中时驻留，LRU 淘汰后退回影子 |
+| **规则清单、版本戳和状态索引**（`chainId → state`、`nodeId → state + 元数据`） | JVM 常驻 | 整个生命周期；条目数随规则总量线性增长 |
+| **影子 `Chain` / `Node` 对象** | JVM 常驻 | 每条启用的清单记录对应一个轻量对象，内容尚未加载时也存在 |
+| **EL 文本 + 编译后的条件树** | JVM 有界缓存 | 命中时驻留，Caffeine 按访问热度淘汰后退回影子 |
 | **脚本源码 + 编译产物** | JVM 有界缓存 | 同上；通过 chain 的引用计数联动淘汰 |
 
-关键性质：**JVM 内存占用与规则总量解耦**。你库里有 10 万条规则、但热点只有 200 条，常驻内存的还是那 200 条的编译产物 + 10 万条极小的版本戳索引——而不是 10 万条 EL 文本。
+关键性质是：**正文和编译产物的常驻规模由缓存容量限制，但 JVM 总内存仍与规则总量有关。** 如果库里有 10 万条规则、热点只有 200 条，JVM 不会常驻 10 万条 EL／脚本正文和编译产物，但仍会常驻 10 万条影子对象及其状态索引。大清单上线前必须使用真实规则规模做堆内存和启动 Manifest 基准，不能只按 `cache.capacity` 估算容量。
 
 ### 10.2 执行热路径
 
@@ -984,13 +1093,16 @@ execute2Resp(chainId)
 
 - **`cache.capacity`**：按你的热点 chain 条数估，默认 500 够大多数应用。设小了频繁淘汰→频繁回源；设大了多吃堆内存。脚本没有独立容量参数——它跟 chain 联动淘汰（chain 被淘汰时，它引用的脚本引用计数减一，归零时一起清）。
 - **`cache.preload-chain-ids`**：把首屏/高 QPS 的关键 chain 列在这里，启动时立即拉取编译，抹平冷启动尖刺。非关键链路不必预热，懒加载就够了。
+- **路由 chain**：`executeRouteChain` 为取得 route 元数据，会在路由执行前逐个回源并编译所有尚未就绪的 Rule-DB chain，而不是只加载最终匹配的 chain。大清单使用路由模式时，应把第一次路由请求视为批量冷加载，压测其延迟并考虑启动预热或拆分 `application-name`。
 - **`sync.poll-seconds`**（SQL / PostgreSQL / MongoDB / Redis）：觉得 3s 不够及时可调小（代价是更频繁的序号查询）；zk / etcd 用 watch，Nacos 用 Listener，此项对它们不生效。
 - **`sync.reconcile-seconds`**：60s 是经验值，是「极端兜底」周期，调小意义不大、反而增加全量 diff 开销。
 - **Nacos Catalog 体积**：每次冷读取和对账都处理整份 Catalog。通过拆分 `application-name` 控制单应用规则量，并监控配置体积、冷加载耗时和发布冲突率；大 Catalog 不应仅靠增大服务端上限硬撑。
 
-### 10.4 v1 实现注记：惰性失效
+### 10.4 v1 实现注记：惰性刷新与 last-good
 
-设计上的「分级刷新」在 v1 以**惰性失效**落地：驻留缓存中的条目收到变更通知后，先把缓存态标记失效，下次执行懒加载新版；进行中的执行继续持有旧引用跑完。这保证切换不中断，但代价是收到变更后第一次执行有一次回源延迟。「后台预编译、消弭首个请求延迟」作为后续增强，不在当前版本。
+驻留条目收到变更通知后会标记为待刷新，但已成功激活的条件树／脚本产物不会立即销毁。下次执行在总线外回源并编译候选版本：成功后原子替换，失败则状态记为 `FAILED`，`desiredVersion` 保持新版而 `activeVersion` 保持旧版，旧的 last-good generation 继续执行。没有任何已激活版本的冷规则加载失败时，执行才会抛出加载异常。进行中的执行始终持有原引用跑完。
+
+因此收到变更后的第一次执行仍可能承担回源和编译延迟，且候选版本损坏时后续执行会继续尝试加载新版；「后台预编译、消弭首个请求延迟」不在当前版本。
 
 ---
 
@@ -1000,7 +1112,23 @@ Rule-DB 运行时会暴露一个**只读结构快照**（`RuleDbRuntimeSnapshot`
 
 ### Spring Boot：actuator 端点
 
-引入 `liteflow-metrics`（Spring Boot 两个 starter 已传递依赖），即可访问：
+Spring Boot 两个 LiteFlow starter 已传递 `liteflow-metrics`，但 Spring Boot Actuator 在 starter 中是 optional 依赖。应用需要显式引入：
+
+```xml
+<dependency>
+    <groupId>org.springframework.boot</groupId>
+    <artifactId>spring-boot-starter-actuator</artifactId>
+</dependency>
+```
+
+并启用、暴露 `liteflow` 端点：
+
+```properties
+management.endpoint.liteflow.enabled=true
+management.endpoints.web.exposure.include=health,info,liteflow
+```
+
+之后才可以访问：
 
 ```
 GET /actuator/liteflow/ruledb
@@ -1040,10 +1168,10 @@ GET /actuator/liteflow/ruledb
   - `shadow`：已登记索引、内容未加载（冷态）。
   - `loading`：正在回源加载。
   - `ready`：已加载且与权威版本一致（正常态）。
-  - `stale`：权威版本变了、本地缓存待失效重载。
+  - `stale`：权威版本变了，本地待刷新到期望版本。
   - `failed`：加载失败（见 `failedTargets` 明细）。
   - `deleted`：已从权威源删除、待清理。
-- **`failedTargets`**：处于 `failed` 的目标明细（最多 20 条），含期望版本、当前已激活版本、错误信息——这是定位「某条规则为什么执行报错」的入口。
+- **`failedTargets`**：处于 `failed` 的目标明细（最多 20 条），含期望版本、当前已激活版本、错误信息。`activeVersion > 0` 表示仍有 last-good generation 服务，`activeVersion = 0` 才表示没有可回退的成功版本。
 
 > 该端点由 `liteflow-metrics` 的 `LiteflowMetaView` 提供，经 `@Endpoint(id="liteflow")` 暴露。同一端点还有 `/actuator/liteflow/chains`、`/actuator/liteflow/nodes` 等结构检视能力（详见 metrics 指南）。
 
@@ -1060,15 +1188,15 @@ GET /actuator/liteflow/ruledb
 | 故障场景 | 行为 |
 |---|---|
 | **启动时存储不可用** | `FlowExecutor` 初始化阶段拉取 manifest 失败会**直接抛异常、启动失败**（不会降级为空规则跑起来）。Rule-DB 模式的启动强依赖存储可用——和下面「运行期存储挂了」是两回事。 |
-| **运行期存储不可用，缓存命中** | 照常执行，完全不受影响。**这是核心可用性属性**——存储挂了不影响已缓存链路跑。（隐含前提：故障期间没有针对该 chain 的变更被应用；一旦变更把缓存态失效，就落入下一行「未命中」的语义。） |
-| **运行期存储不可用，缓存未命中** | fetch 按 `fetch-retry-times`（默认 3）重试，仍失败抛 `ChainLoadException`（区别于 `ChainNotFoundException`——前者是「规则存在但取不回来」，后者是「规则不存在」）。存储恢复后下次执行自动回源，无需干预。 |
+| **运行期存储不可用，已有成功激活版本** | 照常执行 last-good generation。即使已感知到更高的期望版本，只要旧版仍是已激活版本，新版回源失败也不会先销毁旧版；运行时记录 `FAILED` 并在后续执行继续尝试新版。 |
+| **运行期存储不可用，没有已激活版本** | fetch 按 `fetch-retry-times`（默认 3）重试，仍失败抛 `ChainLoadException`（区别于 `ChainNotFoundException`——前者是「规则存在但取不回来」，后者是「规则不存在」）。存储恢复后下次执行自动回源，无需干预。 |
 | **变更通道故障**（轮询报错 / watch 或 Listener 断线） | 标记 `DEGRADED` 并重试。SQL / PostgreSQL / MongoDB / Redis 轮询失败会在下个周期重试；zk / etcd 断线后重建监听并触发全量对账；Nacos 由客户端维护监听，回调损坏、序号断档或消费失败时请求全量对账。断线窗口由周期对账兜底。 |
-| **change_log / changelog 被清理或损坏** | SQL / PostgreSQL 的 `seq` 是全表自增序号，不同 `application_name` 之间出现跳号是正常现象；MongoDB / Redis 则使用连续的应用级序号。Nacos 不保留完整 changelog，只在 Catalog 中保留连续 sequence 和最后一条变更。当应用水位已前进却读不到变更，出现序号断档，或日志中的目标类型／操作无法解析时，对应后端会标记 `DEGRADED` 并立即请求全量对账。 |
-| **fetch 到 enable=false 或行/节点不存在** | 本次执行抛 `ChainLoadException`；下个对账周期该条目从索引移除，之后执行报 chain 不存在（`ChainNotFoundException` 语义）。 |
-| **变更已感知但回源新版失败** | v1 是惰性失效（见 [§10.4](#104-v1-实现注记惰性失效)）：变更到达即失效缓存态，之后每次执行都重试回源，成功前该 chain 执行失败（`ChainLoadException`）。**发布动作本身有小概率把可用的旧版换成暂不可用**——请避开存储抖动窗口发布。 |
+| **change_log / changelog 被清理或损坏** | SQL / PostgreSQL 的 `seq` 是全表自增序号，不同 `application_name` 之间跳号正常；水位已前进但读不到本应用记录时会请求对账，其他被裁剪的历史主要由周期对账补齐。MongoDB / Redis 使用连续的应用级序号，可以直接检测断档。Nacos 只保留连续 sequence 和最后一条变更，序号断档或内容损坏会请求全量对账。 |
+| **fetch 到 enable=false 或行／节点不存在** | 若已有激活版本，本次普通候选加载失败仍保留 last-good；若无激活版本则抛 `ChainLoadException`。后续对账确认目标已删除后会从索引和 FlowBus 移除，再执行时按 chain 不存在处理。 |
+| **变更已感知但回源／编译新版失败** | 若存在已激活版本，记录 `FAILED`，保留旧 `activeVersion` 并继续执行；之后每次执行继续尝试 `desiredVersion`。若从未成功激活过任何版本，则本次执行抛 `ChainLoadException`。chain 和脚本遵循相同语义。删除或删除后重建会改变目标身份，不属于普通升级失败，不能依赖已删除的旧版继续服务。 |
 | **SQL 缺表且未开 `auto-init-table`** | 首次访问存储时报 `ConfigErrorException`，错误信息内含完整可复制执行的 DDL。 |
 
-一句话：**缓存是可用性下限**——只要热点规则在缓存里，存储再怎么抖动，业务照跑。
+一句话：**已成功激活的 last-good generation 是普通升级失败时的可用性下限**；冷规则首次加载、显式删除、删除后重建和缓存淘汰不应被理解为永久保留旧版。
 
 ---
 
@@ -1096,6 +1224,61 @@ GET /actuator/liteflow/ruledb
    - 节点实例 ID 持久化（旧 sql 插件的 `NodeInstanceIdManageSpi` 能力）。
    - 管理 UI / 控制台。v1 只提供 Publisher API 与写入规范。
 
-8. **并发发布语义。** 不传 `expectedVersion` 时是无条件 UPSERT；传 `expectedVersion=0` 表示“仅当不存在时创建”；传正数表示按版本做 CAS 更新。七个后端都保证成功发布的业务版本单调递增。
+8. **并发发布语义。** 不传 `expectedVersion` 时是无条件 UPSERT；传 `expectedVersion=0` 表示“仅当不存在时创建”；传正数表示按版本做 CAS 更新。七个后端都保证同一存续记录的成功发布版本单调递增；删除后用相同 id 重建时版本从 1 开始。
 
-9. **手动 build 的 chain 可以与本模式共存，但 id 不要与存储中的 chain 撞车。** 通过 `LiteFlowChainELBuilder` 手动 build、且 id **不在**存储清单中的 chain 不受 Rule-DB 干预（对账只管理来源于清单的条目，不会把手写 chain 当成「存储中不存在」而删掉）。但如果手动 build 的 id 与存储中的 chain **相同**，懒加载／失效路径会用存储内容**覆盖**手动 build 的版本——撞车时以存储为准。请保证两边 id 集合不相交。
+9. **应用元数据与 Rule-DB id 冲突会启动失败。** 通过 `LiteFlowChainELBuilder` 手动 build、且 id 不在存储清单中的 chain 可以共存；但手写 chain 与存储 chain 同 id，或应用注册的 script node 与存储 script 同 id 时，Rule-DB 初始化会抛 `ConfigErrorException`，不会覆盖应用对象。请保证两边 id 集合不相交。
+
+### 13.1 发布参数与后端限制矩阵
+
+统一请求对象会校验必填字段；各后端还会按照自身表结构或键布局做额外校验。下面列出 2.16.1 代码中最容易踩到的硬边界，长度均按 Unicode code point 计，只有 SQL 正文限制明确按 UTF-8 字节数计：
+
+| 后端 | id／字段限制 | 正文与键限制 |
+|---|---|---|
+| **SQL（MySQL DDL）** | `application-name` 64；chain/node id 128；namespace 64；脚本名 128；type/language 32；`table-prefix` 最长 54 且只能用 ASCII 字母、数字、下划线 | `el`、`route`、`script` 分别不得超过 65,535 UTF-8 bytes，对齐 `TEXT` |
+| **PostgreSQL** | `application-name` 64；chain/node id 128；namespace 64；脚本名 128；type/language 32；`table-prefix` 最长 52 且只能用 ASCII 字母、数字、下划线 | 正文使用 PostgreSQL `TEXT`；仍受数据库、驱动和运维设置限制 |
+| **MongoDB** | `application-name` 和 id 128；namespace 128；脚本名 256；type/language 64；database 只允许 ASCII 字母、数字、下划线、连字符；collection prefix 最长 64 | 单文档与事务大小受 MongoDB 服务端限制 |
+| **Redis** | id 最长 128，且不能包含 `:` 或空白；namespace 64；脚本名 128；type/language 32 | Cluster 必须配置 `key-hash-tag`；正文还受 Redis 单值、Lua 和客户端限制 |
+| **ZooKeeper** | applicationName、rootPath 每个 segment 不能包含 `/`、`..` 或控制字符；rule id 不能为空或包含 `/` | 单个编码后的 meta 或 content znode 上限为 960 KiB |
+| **etcd** | rule id 不能为空或包含 `/`；applicationName 和 rootPath 会直接参与 key 前缀 | 受 etcd 请求大小、配额和历史压缩设置限制 |
+| **Nacos** | data-id-prefix、application-name、group 只能包含字母、数字、`_`、`-`、`.`、`:` | 一个应用的全部规则位于单个 Catalog，受 Nacos 单配置容量限制 |
+
+跨后端迁移时应按**目标后端中更严格的限制**提前校验，不能假设在 MongoDB 或 PostgreSQL 可写入的 id／正文一定能原样迁移到 Redis、ZooKeeper 或 SQL。
+
+---
+
+## 14. 迁移、备份与权限
+
+### 14.1 从旧规则插件迁移
+
+2.16.1 不提供把 `liteflow-rule-*` 数据自动转换为 Rule-DB 存储的迁移器。推荐用受控迁移程序读取旧数据，再调用目标后端的统一 `RulePublisher`，不要直接拼接 Rule-DB 表、键或 Catalog：
+
+1. 确定唯一的 `application-name`，在生产等价环境创建目标存储结构，并用 Publisher 完成必要的表、索引或路径初始化。
+2. 冻结旧管理后台的写入，记录迁移基线；先发布脚本和叶子子 chain，再发布引用它们的父 chain。迁移程序使用 `expectedVersion=0`，遇到重复 id 时停止处理，而不是静默覆盖。
+3. 对比 chain／script 数量、id、正文 MD5、namespace 和 route；使用生产相同的 Java 组件、脚本插件及配置执行冷启动和关键 chain 回归测试。
+4. 切换执行应用时移除旧 `liteflow-rule-*` 插件和 `liteflow.rule-source`，classpath 只保留一个 Rule-DB 后端。不要让新旧插件在同一 `FlowExecutor` 中双读。
+5. 保留旧存储只读快照直到观察期结束。需要回滚时回退应用依赖和配置到旧插件，不要在同一应用内临时混用两套权威源。
+
+迁移期间若业务仍需修改规则，应在切换前再次冻结并重做增量，或由上层管理系统实现经过验证的双写；Rule-DB 本身不提供跨旧插件的双写事务。
+
+### 14.2 备份恢复
+
+- 备份必须覆盖同一后端的完整协议状态：SQL / PostgreSQL 的四张表（包括 `change_log` 和 `change_lock`）、MongoDB 的四个 Collection、Redis 的内容键／id 集合／seq／changelog、ZooKeeper / etcd 的 meta 与 content，以及 Nacos 的整份 Catalog。只恢复正文、不恢复版本和序号会破坏收敛判据。
+- 不要把更低 `version` 的备份在线覆盖到仍在运行的相同 `application-name`。节点可能把它当成迟到旧版本而忽略。完整灾备恢复应停止该应用的 Publisher 和执行节点，原子恢复协议状态后再重启；另一种做法是恢复到新的 `application-name` 后切流。
+- 在线回滚单条规则时，应通过 Publisher 把旧正文发布成更高的新版本。不要直接降低 `version`，也不要只改正文而不更新 MD5 和变更日志。
+- SQL / PostgreSQL 恢复后必须确认 `change_lock` 中仍存在 `lock_id = 1`；Redis / MongoDB 要确认 sequence 不低于保留的 changelog；Nacos Catalog 必须整体恢复并通过正文 MD5、sequence 和 `lastChange` 校验。
+- 恢复后先启动一个执行节点，检查 Rule-DB 快照、冷加载关键 chain 并观察至少一个 `reconcile-seconds` 周期，再逐步恢复流量。
+
+### 14.3 执行账号与发布账号
+
+建议分离只读执行账号和可写 Publisher 账号。精确 ACL 语法随后端和部署方式而异，但能力边界如下：
+
+| 后端 | 执行账号 | Publisher 账号 |
+|---|---|---|
+| **SQL / PostgreSQL** | 对规则表、日志表和锁表 `SELECT`；若开启 `auto-init-table` 还需要 DDL 权限 | `SELECT`、`INSERT`、`UPDATE`、`DELETE`，以及对 `change_lock` 的行锁权限；初始化时需要建表权限 |
+| **MongoDB** | 读取四个 Collection，并允许事务／快照会话 | 读写四个 Collection、执行事务；首次初始化还需创建 Collection／索引 |
+| **Redis** | 读取内容、id 集合、seq 和 changelog 所需命令 | 在相同 key 前缀上执行发布 Lua 及其读写命令 |
+| **ZooKeeper** | 四棵 meta/content 路径及子节点的递归读取和 watch | 创建、读取、更新、删除这些路径并执行 multi-op |
+| **etcd** | 规则前缀的 Range 和 Watch | 同一前缀的 Range、Put、Delete 和 Txn |
+| **Nacos** | 对 Catalog 的读取和 Listener 权限 | 读取 Catalog，并使用 CAS 发布配置的权限 |
+
+执行侧若配置为自动建表／自动初始化，就不再是严格只读账号。生产环境若要求最小权限，应先用 Publisher 或 DBA 初始化结构，再关闭自动初始化并使用只读执行账号。
