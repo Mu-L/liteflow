@@ -122,6 +122,9 @@ public class LiteflowConfig {
 	// chain缓存容量
 	private Integer chainCacheCapacity;
 
+	//Rule-DB模式配置
+	private RuleDbConfig ruleDb;
+
 	// 是否开启虚拟线程(只在jdk21环境下奏效)
 	private Boolean enableVirtualThread;
 
@@ -528,6 +531,14 @@ public class LiteflowConfig {
 
 	public void setChainCacheCapacity(Integer chainCacheCapacity) {
 		this.chainCacheCapacity = chainCacheCapacity;
+	}
+
+	public RuleDbConfig getRuleDb() {
+		return ruleDb;
+	}
+
+	public void setRuleDb(RuleDbConfig ruleDb) {
+		this.ruleDb = ruleDb;
 	}
 
 	public Boolean getEnableVirtualThread() {

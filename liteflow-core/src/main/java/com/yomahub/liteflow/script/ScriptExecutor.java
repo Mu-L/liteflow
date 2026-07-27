@@ -81,6 +81,7 @@ public abstract class ScriptExecutor {
 
 		// 把wrap对象转换成元数据map
 		Map<String, Object> metaMap = BeanUtil.beanToMap(wrap);
+		metaMap.remove("scriptNodeId");
 
 		// 在元数据里放入主Chain的流程参数
 		Slot slot = DataBus.getSlot(wrap.getSlotIndex());

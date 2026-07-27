@@ -514,6 +514,427 @@
       "type": "java.util.Map<java.lang.String,com.yomahub.liteflow.property.agent.PlatformCredential>",
       "description": "Credentials for Anthropic-compatible platforms, keyed by user-defined platform name.",
       "sourceType": "com.yomahub.liteflow.property.agent.AgentConfig"
+    },
+    {
+      "name": "liteflow.rule-db.enabled",
+      "type": "java.lang.Boolean",
+      "description": "Whether to enable Rule-DB mode (storage engine as the authoritative source for rules and scripts).",
+      "sourceType": "com.yomahub.liteflow.property.RuleDbConfig",
+      "defaultValue": true
+    },
+    {
+      "name": "liteflow.rule-db.application-name",
+      "type": "java.lang.String",
+      "description": "Application name used to namespace rules in the storage engine (Rule-DB isolation key).",
+      "sourceType": "com.yomahub.liteflow.property.RuleDbConfig"
+    },
+    {
+      "name": "liteflow.rule-db.cache.capacity",
+      "type": "java.lang.Integer",
+      "description": "Capacity of the executable rule cache, measured in chains.",
+      "sourceType": "com.yomahub.liteflow.property.RuleDbCacheConfig",
+      "defaultValue": 500
+    },
+    {
+      "name": "liteflow.rule-db.cache.preload-chain-ids",
+      "type": "java.lang.String",
+      "description": "Comma-separated chain ids to preload on startup.",
+      "sourceType": "com.yomahub.liteflow.property.RuleDbCacheConfig"
+    },
+    {
+      "name": "liteflow.rule-db.sync.poll-seconds",
+      "type": "java.lang.Integer",
+      "description": "Polling interval in seconds for SQL, PostgreSQL, MongoDB, and Redis incremental changes. Null means use the backend default.",
+      "sourceType": "com.yomahub.liteflow.property.RuleDbSyncConfig"
+    },
+    {
+      "name": "liteflow.rule-db.sync.reconcile-seconds",
+      "type": "java.lang.Integer",
+      "description": "Manifest reconciliation interval in seconds for all Rule-DB backends. SQL, PostgreSQL, MongoDB, and Redis also poll change logs; etcd and ZooKeeper also watch metadata.",
+      "sourceType": "com.yomahub.liteflow.property.RuleDbSyncConfig",
+      "defaultValue": 60
+    },
+    {
+      "name": "liteflow.rule-db.sync.fetch-retry-times",
+      "type": "java.lang.Integer",
+      "description": "Retry times when fetching from the storage engine.",
+      "sourceType": "com.yomahub.liteflow.property.RuleDbSyncConfig",
+      "defaultValue": 3
+    },
+    {
+      "name": "liteflow.rule-db.sql.url",
+      "type": "java.lang.String",
+      "description": "SQL JDBC url.",
+      "sourceType": "com.yomahub.liteflow.property.RuleDbSqlConfig"
+    },
+    {
+      "name": "liteflow.rule-db.sql.username",
+      "type": "java.lang.String",
+      "description": "SQL username.",
+      "sourceType": "com.yomahub.liteflow.property.RuleDbSqlConfig"
+    },
+    {
+      "name": "liteflow.rule-db.sql.password",
+      "type": "java.lang.String",
+      "description": "SQL password.",
+      "sourceType": "com.yomahub.liteflow.property.RuleDbSqlConfig"
+    },
+    {
+      "name": "liteflow.rule-db.sql.driver-class-name",
+      "type": "java.lang.String",
+      "description": "SQL driver class name. Blank means inferred from the url.",
+      "sourceType": "com.yomahub.liteflow.property.RuleDbSqlConfig"
+    },
+    {
+      "name": "liteflow.rule-db.sql.datasource-bean-name",
+      "type": "java.lang.String",
+      "description": "Datasource bean name. Blank means auto-discovery by type.",
+      "sourceType": "com.yomahub.liteflow.property.RuleDbSqlConfig"
+    },
+    {
+      "name": "liteflow.rule-db.sql.table-prefix",
+      "type": "java.lang.String",
+      "description": "SQL table prefix.",
+      "sourceType": "com.yomahub.liteflow.property.RuleDbSqlConfig",
+      "defaultValue": "lf_"
+    },
+    {
+      "name": "liteflow.rule-db.sql.auto-init-table",
+      "type": "java.lang.Boolean",
+      "description": "Whether to auto-initialize tables on startup.",
+      "sourceType": "com.yomahub.liteflow.property.RuleDbSqlConfig",
+      "defaultValue": false
+    },
+    {
+      "name": "liteflow.rule-db.sql.change-log-batch-size",
+      "type": "java.lang.Integer",
+      "description": "Maximum SQL change-log rows loaded in one polling batch.",
+      "sourceType": "com.yomahub.liteflow.property.RuleDbSqlConfig",
+      "defaultValue": 1000
+    },
+    {
+      "name": "liteflow.rule-db.postgresql.url",
+      "type": "java.lang.String",
+      "description": "PostgreSQL JDBC url.",
+      "sourceType": "com.yomahub.liteflow.property.RuleDbPostgresqlConfig"
+    },
+    {
+      "name": "liteflow.rule-db.postgresql.username",
+      "type": "java.lang.String",
+      "description": "PostgreSQL username.",
+      "sourceType": "com.yomahub.liteflow.property.RuleDbPostgresqlConfig"
+    },
+    {
+      "name": "liteflow.rule-db.postgresql.password",
+      "type": "java.lang.String",
+      "description": "PostgreSQL password.",
+      "sourceType": "com.yomahub.liteflow.property.RuleDbPostgresqlConfig"
+    },
+    {
+      "name": "liteflow.rule-db.postgresql.driver-class-name",
+      "type": "java.lang.String",
+      "description": "PostgreSQL driver class name. Blank means org.postgresql.Driver.",
+      "sourceType": "com.yomahub.liteflow.property.RuleDbPostgresqlConfig"
+    },
+    {
+      "name": "liteflow.rule-db.postgresql.datasource-bean-name",
+      "type": "java.lang.String",
+      "description": "PostgreSQL DataSource bean name. Blank means auto-discovery by type.",
+      "sourceType": "com.yomahub.liteflow.property.RuleDbPostgresqlConfig"
+    },
+    {
+      "name": "liteflow.rule-db.postgresql.table-prefix",
+      "type": "java.lang.String",
+      "description": "PostgreSQL table prefix. Only ASCII letters, digits, and underscores are allowed, up to 52 characters.",
+      "sourceType": "com.yomahub.liteflow.property.RuleDbPostgresqlConfig",
+      "defaultValue": "lf_"
+    },
+    {
+      "name": "liteflow.rule-db.postgresql.auto-init-table",
+      "type": "java.lang.Boolean",
+      "description": "Whether to auto-initialize PostgreSQL tables on startup.",
+      "sourceType": "com.yomahub.liteflow.property.RuleDbPostgresqlConfig",
+      "defaultValue": false
+    },
+    {
+      "name": "liteflow.rule-db.postgresql.change-log-batch-size",
+      "type": "java.lang.Integer",
+      "description": "Maximum PostgreSQL change-log rows loaded in one polling batch.",
+      "sourceType": "com.yomahub.liteflow.property.RuleDbPostgresqlConfig",
+      "defaultValue": 1000
+    },
+    {
+      "name": "liteflow.rule-db.mongodb.uri",
+      "type": "java.lang.String",
+      "description": "MongoDB connection URI for a replica set or sharded cluster. Blank means lookup a MongoClient bean.",
+      "sourceType": "com.yomahub.liteflow.property.RuleDbMongoConfig"
+    },
+    {
+      "name": "liteflow.rule-db.mongodb.database",
+      "type": "java.lang.String",
+      "description": "MongoDB database name.",
+      "sourceType": "com.yomahub.liteflow.property.RuleDbMongoConfig",
+      "defaultValue": "liteflow"
+    },
+    {
+      "name": "liteflow.rule-db.mongodb.collection-prefix",
+      "type": "java.lang.String",
+      "description": "MongoDB collection prefix.",
+      "sourceType": "com.yomahub.liteflow.property.RuleDbMongoConfig",
+      "defaultValue": "lf_"
+    },
+    {
+      "name": "liteflow.rule-db.mongodb.mongo-client-bean-name",
+      "type": "java.lang.String",
+      "description": "MongoClient bean name. Blank means auto-discovery by type.",
+      "sourceType": "com.yomahub.liteflow.property.RuleDbMongoConfig"
+    },
+    {
+      "name": "liteflow.rule-db.mongodb.change-log-batch-size",
+      "type": "java.lang.Integer",
+      "description": "Maximum MongoDB change-log documents loaded in one polling batch.",
+      "sourceType": "com.yomahub.liteflow.property.RuleDbMongoConfig",
+      "defaultValue": 1000
+    },
+    {
+      "name": "liteflow.rule-db.redis.address",
+      "type": "java.lang.String",
+      "description": "Redis address(es), comma-separated for cluster or sentinel.",
+      "sourceType": "com.yomahub.liteflow.property.RuleDbRedisConfig"
+    },
+    {
+      "name": "liteflow.rule-db.redis.master-name",
+      "type": "java.lang.String",
+      "description": "Redis master name. Setting this means sentinel mode.",
+      "sourceType": "com.yomahub.liteflow.property.RuleDbRedisConfig"
+    },
+    {
+      "name": "liteflow.rule-db.redis.username",
+      "type": "java.lang.String",
+      "description": "Redis ACL username.",
+      "sourceType": "com.yomahub.liteflow.property.RuleDbRedisConfig"
+    },
+    {
+      "name": "liteflow.rule-db.redis.password",
+      "type": "java.lang.String",
+      "description": "Redis password.",
+      "sourceType": "com.yomahub.liteflow.property.RuleDbRedisConfig"
+    },
+    {
+      "name": "liteflow.rule-db.redis.database",
+      "type": "java.lang.Integer",
+      "description": "Redis database index.",
+      "sourceType": "com.yomahub.liteflow.property.RuleDbRedisConfig",
+      "defaultValue": 0
+    },
+    {
+      "name": "liteflow.rule-db.redis.key-prefix",
+      "type": "java.lang.String",
+      "description": "Redis key prefix.",
+      "sourceType": "com.yomahub.liteflow.property.RuleDbRedisConfig",
+      "defaultValue": "lf"
+    },
+    {
+      "name": "liteflow.rule-db.redis.key-hash-tag",
+      "type": "java.lang.String",
+      "description": "Redis Cluster hash-tag pinning all rule keys to one slot. Required in cluster mode.",
+      "sourceType": "com.yomahub.liteflow.property.RuleDbRedisConfig"
+    },
+    {
+      "name": "liteflow.rule-db.redis.redisson-bean-name",
+      "type": "java.lang.String",
+      "description": "Redisson bean name. Blank means lookup by type.",
+      "sourceType": "com.yomahub.liteflow.property.RuleDbRedisConfig"
+    },
+    {
+      "name": "liteflow.rule-db.etcd.endpoints",
+      "type": "java.lang.String",
+      "description": "Comma-separated etcd endpoints.",
+      "sourceType": "com.yomahub.liteflow.property.RuleDbEtcdConfig"
+    },
+    {
+      "name": "liteflow.rule-db.etcd.user",
+      "type": "java.lang.String",
+      "description": "etcd user.",
+      "sourceType": "com.yomahub.liteflow.property.RuleDbEtcdConfig"
+    },
+    {
+      "name": "liteflow.rule-db.etcd.password",
+      "type": "java.lang.String",
+      "description": "etcd password.",
+      "sourceType": "com.yomahub.liteflow.property.RuleDbEtcdConfig"
+    },
+    {
+      "name": "liteflow.rule-db.etcd.root-path",
+      "type": "java.lang.String",
+      "description": "Root path for Rule-DB data in etcd.",
+      "sourceType": "com.yomahub.liteflow.property.RuleDbEtcdConfig",
+      "defaultValue": "/liteflow"
+    },
+    {
+      "name": "liteflow.rule-db.etcd.ca-certificate",
+      "type": "java.lang.String",
+      "description": "CA certificate file path for etcd TLS. Requires https endpoints.",
+      "sourceType": "com.yomahub.liteflow.property.RuleDbEtcdConfig"
+    },
+    {
+      "name": "liteflow.rule-db.etcd.client-certificate",
+      "type": "java.lang.String",
+      "description": "Client certificate file path for etcd mTLS. Must be configured together with client-key.",
+      "sourceType": "com.yomahub.liteflow.property.RuleDbEtcdConfig"
+    },
+    {
+      "name": "liteflow.rule-db.etcd.client-key",
+      "type": "java.lang.String",
+      "description": "Client private key file path for etcd mTLS. Must be configured together with client-certificate.",
+      "sourceType": "com.yomahub.liteflow.property.RuleDbEtcdConfig"
+    },
+    {
+      "name": "liteflow.rule-db.etcd.authority",
+      "type": "java.lang.String",
+      "description": "gRPC authority override for etcd connections.",
+      "sourceType": "com.yomahub.liteflow.property.RuleDbEtcdConfig"
+    },
+    {
+      "name": "liteflow.rule-db.etcd.connect-timeout-millis",
+      "type": "java.lang.Long",
+      "description": "etcd connect timeout in milliseconds.",
+      "sourceType": "com.yomahub.liteflow.property.RuleDbEtcdConfig",
+      "defaultValue": 5000
+    },
+    {
+      "name": "liteflow.rule-db.etcd.keepalive-time-seconds",
+      "type": "java.lang.Long",
+      "description": "gRPC keepalive interval in seconds.",
+      "sourceType": "com.yomahub.liteflow.property.RuleDbEtcdConfig",
+      "defaultValue": 30
+    },
+    {
+      "name": "liteflow.rule-db.etcd.keepalive-timeout-seconds",
+      "type": "java.lang.Long",
+      "description": "gRPC keepalive timeout in seconds.",
+      "sourceType": "com.yomahub.liteflow.property.RuleDbEtcdConfig",
+      "defaultValue": 10
+    },
+    {
+      "name": "liteflow.rule-db.etcd.keepalive-without-calls",
+      "type": "java.lang.Boolean",
+      "description": "Whether to send keepalive pings when there are no active calls.",
+      "sourceType": "com.yomahub.liteflow.property.RuleDbEtcdConfig",
+      "defaultValue": true
+    },
+    {
+      "name": "liteflow.rule-db.etcd.client-bean-name",
+      "type": "java.lang.String",
+      "description": "Name of an existing io.etcd.jetcd.Client bean to reuse.",
+      "sourceType": "com.yomahub.liteflow.property.RuleDbEtcdConfig"
+    },
+    {
+      "name": "liteflow.rule-db.zk.connect-string",
+      "type": "java.lang.String",
+      "description": "ZooKeeper connection string.",
+      "sourceType": "com.yomahub.liteflow.property.RuleDbZkConfig"
+    },
+    {
+      "name": "liteflow.rule-db.zk.session-timeout",
+      "type": "java.lang.Integer",
+      "description": "ZooKeeper session timeout in milliseconds.",
+      "sourceType": "com.yomahub.liteflow.property.RuleDbZkConfig"
+    },
+    {
+      "name": "liteflow.rule-db.zk.root-path",
+      "type": "java.lang.String",
+      "description": "Root path for Rule-DB data in ZooKeeper.",
+      "sourceType": "com.yomahub.liteflow.property.RuleDbZkConfig",
+      "defaultValue": "/liteflow"
+    },
+    {
+      "name": "liteflow.rule-db.zk.username",
+      "type": "java.lang.String",
+      "description": "ZooKeeper digest auth username. Must be configured together with password.",
+      "sourceType": "com.yomahub.liteflow.property.RuleDbZkConfig"
+    },
+    {
+      "name": "liteflow.rule-db.zk.password",
+      "type": "java.lang.String",
+      "description": "ZooKeeper digest auth password. Must be configured together with username.",
+      "sourceType": "com.yomahub.liteflow.property.RuleDbZkConfig"
+    },
+    {
+      "name": "liteflow.rule-db.zk.curator-bean-name",
+      "type": "java.lang.String",
+      "description": "Name of an existing CuratorFramework bean to reuse.",
+      "sourceType": "com.yomahub.liteflow.property.RuleDbZkConfig"
+    },
+    {
+      "name": "liteflow.rule-db.nacos.server-addr",
+      "type": "java.lang.String",
+      "description": "Nacos server address. Blank means lookup a ConfigService bean.",
+      "sourceType": "com.yomahub.liteflow.property.RuleDbNacosConfig"
+    },
+    {
+      "name": "liteflow.rule-db.nacos.namespace",
+      "type": "java.lang.String",
+      "description": "Nacos namespace id. Blank means the public namespace.",
+      "sourceType": "com.yomahub.liteflow.property.RuleDbNacosConfig"
+    },
+    {
+      "name": "liteflow.rule-db.nacos.group",
+      "type": "java.lang.String",
+      "description": "Nacos group containing Rule-DB catalogs.",
+      "sourceType": "com.yomahub.liteflow.property.RuleDbNacosConfig",
+      "defaultValue": "LITEFLOW_RULE_DB"
+    },
+    {
+      "name": "liteflow.rule-db.nacos.data-id-prefix",
+      "type": "java.lang.String",
+      "description": "Prefix used to build the Nacos catalog dataId.",
+      "sourceType": "com.yomahub.liteflow.property.RuleDbNacosConfig",
+      "defaultValue": "liteflow-rule-db"
+    },
+    {
+      "name": "liteflow.rule-db.nacos.username",
+      "type": "java.lang.String",
+      "description": "Nacos username. Must be configured together with password.",
+      "sourceType": "com.yomahub.liteflow.property.RuleDbNacosConfig"
+    },
+    {
+      "name": "liteflow.rule-db.nacos.password",
+      "type": "java.lang.String",
+      "description": "Nacos password. Must be configured together with username.",
+      "sourceType": "com.yomahub.liteflow.property.RuleDbNacosConfig"
+    },
+    {
+      "name": "liteflow.rule-db.nacos.access-key",
+      "type": "java.lang.String",
+      "description": "Nacos access key. Must be configured together with secret-key and cannot be combined with username/password.",
+      "sourceType": "com.yomahub.liteflow.property.RuleDbNacosConfig"
+    },
+    {
+      "name": "liteflow.rule-db.nacos.secret-key",
+      "type": "java.lang.String",
+      "description": "Nacos secret key. Must be configured together with access-key and cannot be combined with username/password.",
+      "sourceType": "com.yomahub.liteflow.property.RuleDbNacosConfig"
+    },
+    {
+      "name": "liteflow.rule-db.nacos.timeout-millis",
+      "type": "java.lang.Long",
+      "description": "Nacos configuration request timeout in milliseconds.",
+      "sourceType": "com.yomahub.liteflow.property.RuleDbNacosConfig",
+      "defaultValue": 3000
+    },
+    {
+      "name": "liteflow.rule-db.nacos.config-service-bean-name",
+      "type": "java.lang.String",
+      "description": "Name of an existing com.alibaba.nacos.api.config.ConfigService bean to reuse.",
+      "sourceType": "com.yomahub.liteflow.property.RuleDbNacosConfig"
+    },
+    {
+      "name": "liteflow.metrics.enabled",
+      "type": "java.lang.Boolean",
+      "description": "Whether to enable liteflow metrics collection (chain/node timers, counters and registry gauges). Requires a MeterRegistry on the classpath and in the context. Defaults to true.",
+      "sourceType": "com.yomahub.liteflow.springboot4.metrics.LiteflowMetricsAutoConfiguration",
+      "defaultValue": true
     }
   ]
 }

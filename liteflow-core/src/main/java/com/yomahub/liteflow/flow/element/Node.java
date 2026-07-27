@@ -73,6 +73,16 @@ public class Node implements Executable, Cloneable, Rollbackable{
 	// 针对于脚本节点，这个属性代表脚本节点的脚本是否已经编译过
 	private volatile boolean isCompiled = true;
 
+	private volatile long ruleDbScriptVersion;
+
+	private volatile String ruleDbScriptArtifactId;
+
+	private TransmittableThreadLocal<String> executingScriptArtifactId = new TransmittableThreadLocal<>();
+
+	private TransmittableThreadLocal<String> executingScriptLanguage = new TransmittableThreadLocal<>();
+
+	private ThreadLocal<NodeComponent> scriptResultInstance = new ThreadLocal<>();
+
 	// node 的 isAccess 结果，主要用于 WhenCondition 的提前 isAccess 判断，避免 isAccess 方法重复执行
 	private TransmittableThreadLocal<Boolean> accessResult = new TransmittableThreadLocal<>();
 
@@ -162,7 +172,9 @@ public class Node implements Executable, Cloneable, Rollbackable{
 	}
 
 	public NodeComponent getInstance() {
-		// 没有编译的情况，需重新编译
+		if (com.yomahub.liteflow.repository.RuleDbRuntime.isManagedScript(id)) {
+			com.yomahub.liteflow.repository.RuleDbRuntime.refreshScript(this);
+		}
 		if (!this.isCompiled()) {
 			synchronized (this) {
 				if (!this.isCompiled()) {
@@ -177,33 +189,98 @@ public class Node implements Executable, Cloneable, Rollbackable{
 		this.instance = instance;
 	}
 
+	public long getRuleDbScriptVersion() {
+		return ruleDbScriptVersion;
+	}
+
+	public String getRuleDbScriptArtifactId() {
+		return ruleDbScriptArtifactId;
+	}
+
+	public void setRuleDbScriptArtifactId(String ruleDbScriptArtifactId) {
+		this.ruleDbScriptArtifactId = ruleDbScriptArtifactId;
+	}
+
+	public String getExecutingScriptArtifactId() {
+		String artifactId = executingScriptArtifactId.get();
+		return artifactId == null ? ruleDbScriptArtifactId : artifactId;
+	}
+
+	private void enterScriptExecution(com.yomahub.liteflow.repository.RuleDbRuntime.ScriptExecutionLease lease) {
+		executingScriptArtifactId.set(lease.getArtifactId());
+		executingScriptLanguage.set(lease.getLanguage());
+	}
+
+	private void restoreScriptExecution(String artifactId, String language) {
+		if (artifactId == null) {
+			executingScriptArtifactId.remove();
+			executingScriptLanguage.remove();
+		}
+		else {
+			executingScriptArtifactId.set(artifactId);
+			executingScriptLanguage.set(language);
+		}
+	}
+
+	public void installCompiledScript(Node source, long version) {
+		this.name = source.getName();
+		this.type = source.getType();
+		this.script = source.getScript();
+		this.language = source.getLanguage();
+		this.instance = source.instance;
+		this.ruleDbScriptVersion = version;
+		this.ruleDbScriptArtifactId = source.ruleDbScriptArtifactId;
+		this.isCompiled = source.isCompiled();
+	}
+
+	public void clearCompiledScript() {
+		this.script = null;
+		this.instance = null;
+		this.ruleDbScriptVersion = 0;
+		this.ruleDbScriptArtifactId = null;
+		this.isCompiled = false;
+	}
+
 	// node的执行主要逻辑
 	// 所有的可执行节点，其实最终都会落到node上来，因为chain中包含的也是node
 	@Override
 	public void execute(Integer slotIndex) throws Exception {
-		if (ObjectUtil.isNull(getInstance())) {
+		scriptResultInstance.remove();
+		NodeComponent executionInstance = getInstance();
+		if (ObjectUtil.isNull(executionInstance)) {
 			throw new FlowSystemException("there is no instance for node id " + id);
+		}
+		com.yomahub.liteflow.repository.RuleDbRuntime.ScriptExecutionLease scriptLease =
+				com.yomahub.liteflow.repository.RuleDbRuntime.acquireScriptExecution(this);
+		String previousArtifactId = executingScriptArtifactId.get();
+		String previousLanguage = executingScriptLanguage.get();
+		if (scriptLease != null) {
+			executionInstance = this.instance;
+			enterScriptExecution(scriptLease);
 		}
 
 		try {
 			// 把线程属性赋值给组件对象
 			this.setSlotIndex(slotIndex);
-			instance.setRefNode(this);
+			executionInstance.setRefNode(this);
 
 			// 判断是否可执行，所以isAccess经常作为一个组件进入的实际判断要素，用作检查slot里的参数的完备性
-			if (getAccessResult() || instance.isAccess()) {
+			if (getAccessResult() || executionInstance.isAccess()) {
 				// 这里开始进行重试的逻辑和主逻辑的运行
 				NodeExecutor nodeExecutor = NodeExecutorHelper.loadInstance()
-					.buildNodeExecutor(instance.getNodeExecutorClass());
+					.buildNodeExecutor(executionInstance.getNodeExecutorClass());
 				// 调用节点执行器进行执行
-				nodeExecutor.execute(instance);
+				nodeExecutor.execute(executionInstance);
 			} else {
-				LOG.info("[X]skip component[{}] execution", instance.getDisplayName());
+				LOG.info("[X]skip component[{}] execution", executionInstance.getDisplayName());
 			}
 			// 如果组件覆盖了isEnd方法，或者在在逻辑中主要调用了setEnd(true)的话，流程就会立马结束
-			if (instance.isEnd()) {
-				String errorInfo = StrUtil.format("[{}] lead the chain to end", instance.getDisplayName());
+			if (executionInstance.isEnd()) {
+				String errorInfo = StrUtil.format("[{}] lead the chain to end", executionInstance.getDisplayName());
 				throw new ChainEndException(errorInfo);
+			}
+			if (scriptLease != null && executionInstance.getType() != NodeTypeEnum.SCRIPT) {
+				scriptResultInstance.set(executionInstance);
 			}
 		}catch (Exception e) {
 			// 如果组件覆盖了isEnd方法，或者在在逻辑中主要调用了setEnd(true)的话，流程就会立马结束
@@ -212,13 +289,13 @@ public class Node implements Executable, Cloneable, Rollbackable{
 			}
 
 			// 这里再次写一遍的原因是：如果抛错了，还是要看isEnd这个状态，如果为true的话，还是要优先处理ChainEndException
-			if (instance.isEnd()) {
-				String errorInfo = StrUtil.format("[{}] lead the chain to end", instance.getDisplayName());
+			if (executionInstance.isEnd()) {
+				String errorInfo = StrUtil.format("[{}] lead the chain to end", executionInstance.getDisplayName());
 				throw new ChainEndException(errorInfo);
 			}
 
 			// 如果组件覆盖了isContinueOnError方法，返回为true，那即便出了异常，也会继续流程
-			else if (getIsContinueOnErrorResult() || instance.isContinueOnError()) {
+			else if (getIsContinueOnErrorResult() || executionInstance.isContinueOnError()) {
 				String errorMsg = StrUtil.format("component[{}] cause error,but flow is still go on", id);
 				LOG.error(errorMsg);
 			}
@@ -229,25 +306,42 @@ public class Node implements Executable, Cloneable, Rollbackable{
 			}
 		}
 		finally {
-			// 移除threadLocal里的信息
-			this.getInstance().removeRefNode();
-			removeSlotIndex();
-			removeIsEnd();
-			removeLoopIndex();
-			removeAccessResult();
-			removeIsContinueOnErrorResult();
-			removeStepData();
+			try {
+				// 移除threadLocal里的信息
+				executionInstance.removeRefNode();
+				removeSlotIndex();
+				removeIsEnd();
+				removeLoopIndex();
+				removeAccessResult();
+				removeIsContinueOnErrorResult();
+				removeStepData();
+			}
+			finally {
+				if (scriptLease != null) {
+					restoreScriptExecution(previousArtifactId, previousLanguage);
+					scriptLease.close();
+				}
+			}
 		}
 	}
 
 	// 回滚的主要逻辑
 	@Override
 	public void rollback(Integer slotIndex) throws Exception {
+		NodeComponent rollbackInstance = getInstance();
+		com.yomahub.liteflow.repository.RuleDbRuntime.ScriptExecutionLease scriptLease =
+				com.yomahub.liteflow.repository.RuleDbRuntime.acquireScriptExecution(this);
+		String previousArtifactId = executingScriptArtifactId.get();
+		String previousLanguage = executingScriptLanguage.get();
+		if (scriptLease != null) {
+			rollbackInstance = this.instance;
+			enterScriptExecution(scriptLease);
+		}
 		try {
 			// 把线程属性赋值给组件对象
 			this.setSlotIndex(slotIndex);
-			getInstance().setRefNode(this);
-			instance.doRollback();
+			rollbackInstance.setRefNode(this);
+			rollbackInstance.doRollback();
 		}
 		catch (Exception e) {
 			String errorMsg = StrUtil.format("component[{}] rollback error,error:{}", id, e.getMessage());
@@ -256,7 +350,11 @@ public class Node implements Executable, Cloneable, Rollbackable{
 		finally {
 			// 移除threadLocal里的信息
 			this.removeSlotIndex();
-			instance.removeRefNode();
+			rollbackInstance.removeRefNode();
+			if (scriptLease != null) {
+				restoreScriptExecution(previousArtifactId, previousLanguage);
+				scriptLease.close();
+			}
 		}
 	}
 
@@ -266,10 +364,27 @@ public class Node implements Executable, Cloneable, Rollbackable{
 	// 详情见这个issue:https://gitee.com/dromara/liteFlow/issues/I4XRBA
 	@Override
 	public boolean isAccess(Integer slotIndex) throws Exception {
+		NodeComponent accessInstance = getInstance();
+		com.yomahub.liteflow.repository.RuleDbRuntime.ScriptExecutionLease scriptLease =
+				com.yomahub.liteflow.repository.RuleDbRuntime.acquireScriptExecution(this);
+		String previousArtifactId = executingScriptArtifactId.get();
+		String previousLanguage = executingScriptLanguage.get();
+		if (scriptLease != null) {
+			accessInstance = this.instance;
+			enterScriptExecution(scriptLease);
+		}
 		// 把线程属性赋值给组件对象
-		this.setSlotIndex(slotIndex);
-		getInstance().setRefNode(this);
-		return instance.isAccess();
+		try {
+			this.setSlotIndex(slotIndex);
+			accessInstance.setRefNode(this);
+			return accessInstance.isAccess();
+		}
+		finally {
+			if (scriptLease != null) {
+				restoreScriptExecution(previousArtifactId, previousLanguage);
+				scriptLease.close();
+			}
+		}
 	}
 
 	@Override
@@ -490,7 +605,7 @@ public class Node implements Executable, Cloneable, Rollbackable{
 	}
 
 	public String getLanguage() {
-		return language;
+		return executingScriptArtifactId.get() == null ? language : executingScriptLanguage.get();
 	}
 
 	public void setLanguage(String language) {
@@ -507,7 +622,16 @@ public class Node implements Executable, Cloneable, Rollbackable{
 
 	@Override
 	public <T> T getItemResultMetaValue(Integer slotIndex) {
-		return getInstance().getItemResultMetaValue(slotIndex);
+		NodeComponent resultInstance = scriptResultInstance.get();
+		if (resultInstance == null) {
+			return getInstance().getItemResultMetaValue(slotIndex);
+		}
+		try {
+			return resultInstance.getItemResultMetaValue(slotIndex);
+		}
+		finally {
+			scriptResultInstance.remove();
+		}
 	}
 
 	public void putBindData(String key, String value) {
@@ -586,6 +710,9 @@ public class Node implements Executable, Cloneable, Rollbackable{
 		node.slotIndexTL = new TransmittableThreadLocal<>();
 		node.isEndTL = new TransmittableThreadLocal<>();
 		node.isContinueOnErrorResult = new TransmittableThreadLocal<>();
+		node.executingScriptArtifactId = new TransmittableThreadLocal<>();
+		node.executingScriptLanguage = new TransmittableThreadLocal<>();
+		node.scriptResultInstance = new ThreadLocal<>();
 		node.stepDataTL = new ThreadLocal<>();
 		node.lock4LoopIndex = new ReentrantLock();
 		node.lock4LoopObj = new ReentrantLock();

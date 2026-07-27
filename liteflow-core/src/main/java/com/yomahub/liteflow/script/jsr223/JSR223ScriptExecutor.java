@@ -71,12 +71,13 @@ public abstract class JSR223ScriptExecutor extends ScriptExecutor {
 
 	@Override
 	public Object executeScript(ScriptExecuteWrap wrap) throws Exception {
-		if (!compiledScriptMap.containsKey(wrap.getNodeId())) {
+		String scriptNodeId = wrap.getScriptNodeId();
+		if (!compiledScriptMap.containsKey(scriptNodeId)) {
 			String errorMsg = StrUtil.format("script for node[{}] is not loaded", wrap.getNodeId());
 			throw new ScriptLoadException(errorMsg);
 		}
 
-		CompiledScript compiledScript = compiledScriptMap.get(wrap.getNodeId());
+		CompiledScript compiledScript = compiledScriptMap.get(scriptNodeId);
 		Bindings bindings = new SimpleBindings();
 
 		bindParam(wrap, bindings::put, bindings::putIfAbsent);

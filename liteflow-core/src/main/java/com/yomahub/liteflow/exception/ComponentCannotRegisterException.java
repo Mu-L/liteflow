@@ -18,6 +18,11 @@ public class ComponentCannotRegisterException extends RuntimeException {
 		this.message = message;
 	}
 
+	public ComponentCannotRegisterException(String message, Throwable cause) {
+		super(message, cause);
+		this.message = message;
+	}
+
 	@Override
 	public String getMessage() {
 		return message;

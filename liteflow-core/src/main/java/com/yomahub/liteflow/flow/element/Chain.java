@@ -18,6 +18,7 @@ import com.yomahub.liteflow.common.ChainConstant;
 import com.yomahub.liteflow.enums.ExecuteableTypeEnum;
 import com.yomahub.liteflow.exception.ChainEndException;
 import com.yomahub.liteflow.exception.FlowSystemException;
+import com.yomahub.liteflow.flow.FlowBus;
 import com.yomahub.liteflow.lifecycle.LifeCycleHolder;
 import com.yomahub.liteflow.log.LFLog;
 import com.yomahub.liteflow.log.LFLoggerManager;
@@ -27,6 +28,7 @@ import com.yomahub.liteflow.slot.Slot;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Objects;
 
 /**
  * chain对象，实现可执行器
@@ -41,6 +43,8 @@ public class Chain implements Executable {
 	private static final LFLog LOG = LFLoggerManager.getLogger(Chain.class);
 
 	private String chainId;
+
+	private boolean transientElChain;
 
 	private Executable routeItem;
 
@@ -111,20 +115,21 @@ public class Chain implements Executable {
 		this.chainId = chainId;
 	}
 
+	public boolean isTransientElChain() {
+		return transientElChain;
+	}
+
+	public void setTransientElChain(boolean transientElChain) {
+		this.transientElChain = transientElChain;
+	}
+
 	// 执行chain的主方法
 	@Override
 	public void execute(Integer slotIndex) throws Exception {
 		//生成runtimeId
 		this.runtimeIdTL.set(System.nanoTime());
 
-		//如果EL还未编译，则进行编译
-		if (BooleanUtil.isFalse(isCompiled)) {
-			synchronized (this) {
-				if (BooleanUtil.isFalse(isCompiled)) {
-					LiteFlowChainELBuilder.buildUnCompileChain(this);
-				}
-			}
-		}
+		ensureCompiled();
 
 		// 这里先拿到this.conditionList的引用
 		// 因为在正式执行condition之前，this.conditionList有可能被其他线程置空
@@ -175,7 +180,12 @@ public class Chain implements Executable {
 	}
 
 	public void executeRoute(Integer slotIndex) throws Exception {
-		if (routeItem == null) {
+		ensureCompiled();
+		Executable routeItemRef;
+		synchronized (this) {
+			routeItemRef = routeItem;
+		}
+		if (routeItemRef == null) {
 			throw new FlowSystemException("no route condition or node in this chain[" + chainId + "]");
 		}
 		Slot slot = DataBus.getSlot(slotIndex);
@@ -184,10 +194,10 @@ public class Chain implements Executable {
 			slot.setChainId(chainId);
 
 			// 执行决策路由
-			routeItem.setCurrChainId(chainId);
-			routeItem.execute(slotIndex);
+			routeItemRef.setCurrChainId(chainId);
+			routeItemRef.execute(slotIndex);
 
-			boolean routeResult = routeItem.getItemResultMetaValue(slotIndex);
+			boolean routeResult = routeItemRef.getItemResultMetaValue(slotIndex);
 
 			slot.setRouteResult(routeResult);
 		}
@@ -197,6 +207,30 @@ public class Chain implements Executable {
 		catch (Exception e) {
 			slot.setException(e);
 			throw e;
+		}
+	}
+
+	private void ensureCompiled() {
+		if (com.yomahub.liteflow.repository.RuleDbRuntime.isChainStale(chainId)
+				|| (BooleanUtil.isFalse(isCompiled)
+				&& com.yomahub.liteflow.repository.RuleDbRuntime.isManagedChain(chainId))) {
+			LiteFlowChainELBuilder.buildUnCompileChain(this);
+		}
+		if (BooleanUtil.isTrue(isCompiled)) {
+			return;
+		}
+
+		boolean loadRuleDbOutsideMonitor = false;
+		synchronized (this) {
+			if (BooleanUtil.isFalse(isCompiled)) {
+				loadRuleDbOutsideMonitor = com.yomahub.liteflow.repository.RuleDbRuntime.isManagedChain(chainId);
+				if (!loadRuleDbOutsideMonitor) {
+					LiteFlowChainELBuilder.buildUnCompileChain(this);
+				}
+			}
+		}
+		if (loadRuleDbOutsideMonitor) {
+			LiteFlowChainELBuilder.buildUnCompileChain(this);
 		}
 	}
 
@@ -283,6 +317,25 @@ public class Chain implements Executable {
 
 	public void setRouteEl(String routeEl) {
 		this.routeEl = routeEl;
+	}
+
+	public synchronized void installCompiledRule(Chain candidate) {
+		String oldElMd5 = this.elMd5;
+		if (!Objects.equals(oldElMd5, candidate.getElMd5())) {
+			FlowBus.removeElMd5Mapping(this, oldElMd5);
+		}
+		this.el = candidate.getEl();
+		this.elMd5 = candidate.getElMd5();
+		this.routeEl = candidate.getRouteEl();
+		this.routeItem = candidate.getRouteItem();
+		this.namespace = candidate.getNamespace();
+		this.conditionList = candidate.getConditionList();
+		this.isCompiled = candidate.isCompiled();
+		FlowBus.addElMd5Mapping(this, this.elMd5);
+	}
+
+	public synchronized boolean hasRouteInNamespace(String namespace) {
+		return Objects.equals(this.namespace, namespace) && routeItem != null;
 	}
 
 	public boolean isAbstract() {

@@ -22,6 +22,8 @@ public class LifeCycleHolder {
 
     private static final List<PostProcessChainExecuteLifeCycle> POST_PROCESS_CHAIN_EXECUTE_LIFE_CYCLE_LIST = new ArrayList<>();
 
+    private static final List<PostProcessNodeExecuteLifeCycle> POST_PROCESS_NODE_EXECUTE_LIFE_CYCLE_LIST = new ArrayList<>();
+
 
     public static void addLifeCycle(LifeCycle lifeCycle){
         if (PostProcessScriptEngineInitLifeCycle.class.isAssignableFrom(lifeCycle.getClass())){
@@ -34,6 +36,8 @@ public class LifeCycleHolder {
             POST_PROCESS_FLOW_EXECUTE_LIFE_CYCLE_LIST.add((PostProcessFlowExecuteLifeCycle)lifeCycle);
         }else if(PostProcessChainExecuteLifeCycle.class.isAssignableFrom(lifeCycle.getClass())){
             POST_PROCESS_CHAIN_EXECUTE_LIFE_CYCLE_LIST.add((PostProcessChainExecuteLifeCycle)lifeCycle);
+        }else if(PostProcessNodeExecuteLifeCycle.class.isAssignableFrom(lifeCycle.getClass())){
+            POST_PROCESS_NODE_EXECUTE_LIFE_CYCLE_LIST.add((PostProcessNodeExecuteLifeCycle)lifeCycle);
         }
     }
 
@@ -57,11 +61,16 @@ public class LifeCycleHolder {
         return POST_PROCESS_CHAIN_EXECUTE_LIFE_CYCLE_LIST;
     }
 
+    public static List<PostProcessNodeExecuteLifeCycle> getPostProcessNodeExecuteLifeCycleList() {
+        return POST_PROCESS_NODE_EXECUTE_LIFE_CYCLE_LIST;
+    }
+
     public static void clean(){
         POST_PROCESS_SCRIPT_ENGINE_INIT_LIFE_CYCLE_LIST.clear();
         POST_PROCESS_CHAIN_BUILD_LIFE_CYCLE_LIST.clear();
         POST_PROCESS_NODE_BUILD_LIFE_CYCLE_LIST.clear();
         POST_PROCESS_FLOW_EXECUTE_LIFE_CYCLE_LIST.clear();
         POST_PROCESS_CHAIN_EXECUTE_LIFE_CYCLE_LIST.clear();
+        POST_PROCESS_NODE_EXECUTE_LIFE_CYCLE_LIST.clear();
     }
 }

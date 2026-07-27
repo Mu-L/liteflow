@@ -44,7 +44,7 @@ public class LiteFlowProxyUtil {
 		}catch (Exception e) {
 			String errMsg = StrUtil.format("Error while proxying bean[{}]", declWarpBean.getRawClazz().getName());
 			LOG.error(errMsg);
-			throw new ComponentProxyErrorException(errMsg);
+			throw new ComponentProxyErrorException(errMsg, e);
 		}
 	}
 

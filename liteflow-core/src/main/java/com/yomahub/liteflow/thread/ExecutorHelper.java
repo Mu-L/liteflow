@@ -166,7 +166,7 @@ public class ExecutorHelper {
 		}
 		catch (Exception e) {
 			LOG.error(e.getMessage());
-			throw new ThreadExecutorServiceCreateException(e.getMessage());
+			throw new ThreadExecutorServiceCreateException(e.getMessage(), e);
 		}
 	}
 

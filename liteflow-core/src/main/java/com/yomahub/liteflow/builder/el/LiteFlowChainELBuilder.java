@@ -60,6 +60,8 @@ public class LiteFlowChainELBuilder {
 
 	private Chain chain;
 
+	private String compilationOwnerChainId;
+
 	/**
 	 * 这是route EL的文本
 	 */
@@ -91,7 +93,25 @@ public class LiteFlowChainELBuilder {
 
 	public LiteFlowChainELBuilder(Chain chain) {
 		this.chain = chain;
+		this.compilationOwnerChainId = chain.getChainId();
 		this.conditionList = new ArrayList<>();
+	}
+
+	public static Chain compileUnpublishedChain(Chain chain, String ownerChainId) {
+		LiteFlowChainELBuilder builder = new LiteFlowChainELBuilder(chain);
+		builder.compilationOwnerChainId = ownerChainId;
+		builder.compileChain(false);
+		return chain;
+	}
+
+	public static void assignNodeInstanceIds(Chain chain, String ownerChainId) {
+		if (!LiteflowConfigGetter.get().getEnableNodeInstanceId() || chain == null
+				|| CollectionUtil.isEmpty(chain.getConditionList())) {
+			return;
+		}
+		LiteFlowChainELBuilder builder = new LiteFlowChainELBuilder(chain);
+		builder.compilationOwnerChainId = ownerChainId;
+		chain.getConditionList().forEach(builder::setNodesInstanceId);
 	}
 
 	// 在parser中chain的build是2段式的，因为涉及到依赖问题，以前是递归parser
@@ -122,6 +142,11 @@ public class LiteFlowChainELBuilder {
 		return this;
 	}
 
+	public LiteFlowChainELBuilder setTransientElChain(boolean transientElChain) {
+		this.chain.setTransientElChain(transientElChain);
+		return this;
+	}
+
 	public LiteFlowChainELBuilder setRoute(String routeEl){
 		if (StrUtil.isBlank(routeEl)) {
 			return this;
@@ -145,10 +170,14 @@ public class LiteFlowChainELBuilder {
 	}
 
 	// 往condition里设置instanceId
-    private void setNodesInstanceId(Condition condition) {
+	private void setNodesInstanceId(Condition condition) {
 		NodeInstanceIdManageSpi nodeInstanceIdManageSpi = NodeInstanceIdManageSpiHolder.getInstance().getNodeInstanceIdManageSpi();
-
-		nodeInstanceIdManageSpi.setNodesInstanceId(condition, chain);
+		Chain identityChain = chain;
+		if (!Objects.equals(compilationOwnerChainId, chain.getChainId())) {
+			identityChain = new Chain(compilationOwnerChainId);
+			identityChain.setElMd5(chain.getElMd5());
+		}
+		nodeInstanceIdManageSpi.setNodesInstanceId(condition, identityChain);
     }
 
 
@@ -203,6 +232,10 @@ public class LiteFlowChainELBuilder {
 	}
 
 	private void compileChain(){
+		compileChain(true);
+	}
+
+	private void compileChain(boolean publish){
 		LiteflowConfig liteflowConfig = LiteflowConfigGetter.get();
 		// 编译规则
 		String elStr = this.chain.getEl();
@@ -217,7 +250,7 @@ public class LiteFlowChainELBuilder {
 				throw new ELParseException(StrUtil.format("parse el fail,el:[{}]", elStr));
 			}
 
-			if (liteflowConfig.getEnableNodeInstanceId()) {
+			if (publish && liteflowConfig.getEnableNodeInstanceId()) {
 				setNodesInstanceId(condition);
 			}
 
@@ -277,7 +310,9 @@ public class LiteFlowChainELBuilder {
 		if (CollectionUtil.isNotEmpty(this.chain.getConditionList())){
 			this.chain.setCompiled(true);
 		}
-		FlowBus.addChain(this.chain);
+		if (publish) {
+			FlowBus.addChain(this.chain);
+		}
 	}
 
 
@@ -334,10 +369,27 @@ public class LiteFlowChainELBuilder {
 	}
 
 	public static void buildUnCompileChain(Chain chain){
-		if (StrUtil.isBlank(chain.getEl())){
-			throw new FlowSystemException(StrUtil.format("no el content in this unCompile chain[{}]", chain.getChainId()));
+		// Rule-DB 模式：影子/失效 chain 先回源填 EL
+		boolean ruleDbActive = com.yomahub.liteflow.repository.RuleDbRuntime.isActive();
+		try {
+			if (ruleDbActive
+					&& com.yomahub.liteflow.repository.RuleDbRuntime.loadAndInstallChainCandidate(chain)){
+				return;
+			}
+			if (StrUtil.isBlank(chain.getEl())){
+				throw new FlowSystemException(StrUtil.format("no el content in this unCompile chain[{}]", chain.getChainId()));
+			}
+			fromChain(chain).compileChain();
+			// Rule-DB 模式：编译成功后登记缓存 + 脚本引用计数
+			if (ruleDbActive){
+				com.yomahub.liteflow.repository.RuleDbRuntime.recordCompiledChain(chain);
+			}
+		} catch (RuntimeException e) {
+			if (ruleDbActive) {
+				com.yomahub.liteflow.repository.RuleDbRuntime.markChainLoadFailed(chain, e);
+			}
+			throw e;
 		}
-		fromChain(chain).compileChain();
 	}
 
 	@SuppressWarnings("unchecked")
@@ -362,7 +414,9 @@ public class LiteFlowChainELBuilder {
 		// 所以这里要判断表达式里有没有其他的chain，如果有，进行先行解析
 		Set<String> itemSet = EXPRESS_RUNNER.getOutVarNames(elStr);
 		itemSet.forEach(item -> {
-			if (FlowBus.containChain(item) && ObjectUtil.notEqual(chain.getChainId(), item)) {
+			if (FlowBus.containChain(item)
+					&& ObjectUtil.notEqual(chain.getChainId(), item)
+					&& ObjectUtil.notEqual(compilationOwnerChainId, item)) {
 				Chain itemChain = FlowBus.getChain(item);
 				if (!itemChain.isCompiled()){
 					buildUnCompileChain(FlowBus.getChain(item));

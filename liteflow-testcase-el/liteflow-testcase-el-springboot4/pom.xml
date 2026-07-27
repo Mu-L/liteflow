@@ -91,6 +91,27 @@
                 <artifactId>spring-boot-starter-test</artifactId>
                 <version>${springboot4.version}</version>
             </dependency>
+            <!-- 覆盖父 pom 锁定的 Spring Boot 2.6.8 / Micrometer 1.8.5，强制 actuator 链路对齐 Boot 4.0.6 -->
+            <dependency>
+                <groupId>io.micrometer</groupId>
+                <artifactId>micrometer-core</artifactId>
+                <version>1.16.5</version>
+            </dependency>
+            <dependency>
+                <groupId>org.springframework.boot</groupId>
+                <artifactId>spring-boot-actuator</artifactId>
+                <version>${springboot4.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.springframework.boot</groupId>
+                <artifactId>spring-boot-actuator-autoconfigure</artifactId>
+                <version>${springboot4.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.springframework.boot</groupId>
+                <artifactId>spring-boot-starter-actuator</artifactId>
+                <version>${springboot4.version}</version>
+            </dependency>
         </dependencies>
     </dependencyManagement>
 
@@ -117,6 +138,11 @@
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-actuator</artifactId>
             <scope>test</scope>
         </dependency>
         <dependency>

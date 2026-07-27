@@ -18,6 +18,11 @@ public class RequestIdGeneratorException extends RuntimeException {
 		this.message = message;
 	}
 
+	public RequestIdGeneratorException(String message, Throwable cause) {
+		super(message, cause);
+		this.message = message;
+	}
+
 	@Override
 	public String getMessage() {
 		return message;

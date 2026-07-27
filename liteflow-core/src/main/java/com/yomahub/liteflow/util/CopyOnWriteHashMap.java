@@ -167,6 +167,30 @@ public class CopyOnWriteHashMap<K, V> extends ConcurrentHashMap<K, V> {
 	}
 
 	@Override
+	public boolean remove(Object key, Object value) {
+		synchronized (this) {
+			ConcurrentHashMap<K, V> newCore = duplicate(view);
+			boolean result = newCore.remove(key, value);
+			if (result) {
+				view = newCore; // volatile write
+			}
+			return result;
+		}
+	}
+
+	@Override
+	public boolean replace(K key, V oldValue, V newValue) {
+		synchronized (this) {
+			ConcurrentHashMap<K, V> newCore = duplicate(view);
+			boolean result = newCore.replace(key, oldValue, newValue);
+			if (result) {
+				view = newCore; // volatile write
+			}
+			return result;
+		}
+	}
+
+	@Override
 	public void putAll(Map<? extends K, ? extends V> t) {
 		synchronized (this) {
 			ConcurrentHashMap<K, V> newCore = duplicate(view);

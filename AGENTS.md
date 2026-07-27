@@ -4,7 +4,7 @@ This file provides guidance to Codex (Codex.ai/code) when working with code in t
 
 ## Overview
 
-LiteFlow (v2.15.3) is a lightweight rules engine framework for complex component-based business orchestration. It uses a DSL to drive workflows with support for hot reload and 11 scripting languages. The project targets Java 8+ (up to JDK 25) and has 2000+ test cases.
+LiteFlow (v2.16.1) is a lightweight rules engine framework for complex component-based business orchestration. It uses a DSL to drive workflows with support for hot reload and 11 scripting languages. The project targets Java 8+ (up to JDK 25) and has 2000+ test cases.
 
 **Official Documentation**: https://liteflow.cc/pages/5816c5/
 
@@ -140,6 +140,15 @@ Three modes (`ParseModeEnum`):
 - **liteflow-rule-apollo**: Apollo configuration center
 - **liteflow-rule-redis**: Redis configuration source
 
+#### Rule-DB Modules (Publisher plus 6 implementations in the root-level `liteflow-rule-db/` parent module)
+- **liteflow-rule-db-publisher**: Backend-neutral publishing API and ServiceLoader contract
+- **liteflow-rule-db-sql**: SQL-backed authoritative storage with change-log polling
+- **liteflow-rule-db-postgresql**: PostgreSQL-backed authoritative storage with transactional publishing and change-log polling
+- **liteflow-rule-db-mongodb**: MongoDB-backed authoritative storage with transactional publishing and change-log polling
+- **liteflow-rule-db-redis**: Redis-backed authoritative storage with change-log polling
+- **liteflow-rule-db-etcd**: etcd-backed authoritative storage with metadata watch
+- **liteflow-rule-db-zk**: ZooKeeper-backed authoritative storage with metadata watch
+
 #### Script Plugins (11 languages in `liteflow-script-plugin/`)
 - **liteflow-script-groovy**: Groovy scripting
 - **liteflow-script-javascript**: Rhino JavaScript (JSR223)
@@ -234,4 +243,4 @@ Components implement `rollback()` for automatic rollback on failure (executed in
 - **Fail-Fast**: Validation at parse time with detailed error messages
 - **Fluent APIs**: Builder pattern for chain construction (EL builder)
 - **Namespaces**: Chains can be organized into namespaces
-- **Versioning**: Uses `${revision}` placeholder (currently 2.15.3) via flatten-maven-plugin
+- **Versioning**: Uses `${revision}` placeholder (currently 2.16.1) via flatten-maven-plugin

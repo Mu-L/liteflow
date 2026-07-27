@@ -23,7 +23,7 @@ public abstract class BaseOperator<T extends Executable> implements QLFunctional
 			throw e;
 		}
 		catch (Exception e) {
-			throw new ELParseException("errors occurred in EL parsing");
+			throw new ELParseException("errors occurred in EL parsing with operator[" + this.getClass().getSimpleName() + "]: " + e.getMessage(), e);
 		}
 	}
 

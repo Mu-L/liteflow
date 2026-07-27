@@ -59,7 +59,8 @@ public class GraalJavaScriptExecutor extends ScriptExecutor {
 
 	@Override
 	public Object executeScript(ScriptExecuteWrap wrap) {
-		if (!scriptMap.containsKey(wrap.getNodeId())) {
+		String scriptNodeId = wrap.getScriptNodeId();
+		if (!scriptMap.containsKey(scriptNodeId)) {
 			String errorMsg = StrUtil.format("script for node[{}] is not loaded", wrap.getNodeId());
 			throw new ScriptLoadException(errorMsg);
 		}
@@ -72,7 +73,7 @@ public class GraalJavaScriptExecutor extends ScriptExecutor {
 				}
 			});
 
-			Value value = context.eval(scriptMap.get(wrap.getNodeId()));
+			Value value = context.eval(scriptMap.get(scriptNodeId));
 
 			// 处理 null 值
 			if (value.isNull()) {

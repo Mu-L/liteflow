@@ -45,6 +45,15 @@
         <module>liteflow-testcase-el-script-javax-springboot</module>
         <module>liteflow-testcase-el-sql-springboot-sharding-jdbc</module>
         <module>liteflow-testcase-el-script-javaxpro-springboot</module>
+        <module>liteflow-testcase-el-rule-db-core</module>
+        <module>liteflow-testcase-el-rule-db-publisher</module>
+        <module>liteflow-testcase-el-rule-db-sql-springboot</module>
+        <module>liteflow-testcase-el-rule-db-postgresql-springboot</module>
+        <module>liteflow-testcase-el-rule-db-mongodb-springboot</module>
+        <module>liteflow-testcase-el-rule-db-redis-springboot</module>
+        <module>liteflow-testcase-el-rule-db-etcd-springboot</module>
+        <module>liteflow-testcase-el-rule-db-zk-springboot</module>
+        <module>liteflow-testcase-el-rule-db-nacos-springboot</module>
     </modules>
 
     <profiles>
@@ -57,6 +66,13 @@
             <modules>
                 <module>liteflow-testcase-el-react-agent</module>
                 <module>liteflow-testcase-el-springboot4</module>
+				<module>liteflow-testcase-el-rule-db-sql-springboot4</module>
+				<module>liteflow-testcase-el-rule-db-postgresql-springboot4</module>
+				<module>liteflow-testcase-el-rule-db-mongodb-springboot4</module>
+				<module>liteflow-testcase-el-rule-db-redis-springboot4</module>
+				<module>liteflow-testcase-el-rule-db-etcd-springboot4</module>
+				<module>liteflow-testcase-el-rule-db-zk-springboot4</module>
+				<module>liteflow-testcase-el-rule-db-nacos-springboot4</module>
             </modules>
         </profile>
     </profiles>

@@ -23,6 +23,7 @@ import com.yomahub.liteflow.core.proxy.LiteFlowProxyUtil;
 import com.yomahub.liteflow.enums.FlowParserTypeEnum;
 import com.yomahub.liteflow.enums.NodeTypeEnum;
 import com.yomahub.liteflow.enums.ParseModeEnum;
+import com.yomahub.liteflow.exception.ChainLoadException;
 import com.yomahub.liteflow.exception.ComponentCannotRegisterException;
 import com.yomahub.liteflow.exception.NodeIdUnIllegalException;
 import com.yomahub.liteflow.exception.NullNodeTypeException;
@@ -115,7 +116,7 @@ public class FlowBus {
 		chainMap.put(chain.getChainId(), chain);
 
 		if (StrUtil.isNotBlank(chain.getEl())){
-			elMd5Map.put(chain.getElMd5(), chain.getChainId());
+			addElMd5Mapping(chain, chain.getElMd5());
 		}
 
 		//如果有生命周期则执行相应生命周期实现
@@ -188,7 +189,7 @@ public class FlowBus {
 			cmpClazz = Class.forName(cmpClazzStr);
 		}
 		catch (Exception e) {
-			throw new ComponentCannotRegisterException(e.getMessage());
+			throw new ComponentCannotRegisterException(e.getMessage(), e);
 		}
 		addNode(nodeId, name, nodeType, cmpClazz, null, null);
 	}
@@ -271,28 +272,89 @@ public class FlowBus {
 	}
 
 	public static void compileScriptNode(Node node) {
-		String nodeId = node.getId(), name = node.getName(), script = node.getScript(), language = node.getLanguage();
-		NodeTypeEnum type = node.getType();
-        try {
+		boolean ruleDbActive = com.yomahub.liteflow.repository.RuleDbRuntime.isActive();
+		boolean ruleDbManaged = ruleDbActive
+				&& com.yomahub.liteflow.repository.RuleDbRuntime.scriptState(node.getId()) != null;
+		String nodeId = node.getId(), name = node.getName();
+		try {
+			// Rule-DB 模式：脚本影子/失效先回源填 script（传 node 本体：EL 编译期会 clone Node）
+			if (ruleDbManaged){
+				com.yomahub.liteflow.repository.RuleDbRuntime.ensureScriptLoaded(node);
+			}
+			String script = node.getScript(), language = node.getLanguage();
+			NodeTypeEnum type = node.getType();
             List<NodeComponent> cmpInstanceList = getNodeComponentList(nodeId, name, type, ScriptComponent.ScriptComponentClassMap.get(type));
 
 			NodeComponent cmpInstance = cmpInstanceList.get(0);
 
-			addCompiledNode2Map(node, nodeId, script, language, type, cmpInstance);
-        } catch (Exception e) {
+			loadCompiledNode(node, nodeId, script, language, type, cmpInstance);
+			if (ruleDbManaged) {
+				com.yomahub.liteflow.repository.RuleDbRuntime.recordCompiledScript(node);
+				if (!node.isCompiled()) {
+					throw new ChainLoadException(StrUtil.format("script node[{}] changed or was deleted while compiling", nodeId));
+				}
+			} else {
+				put2NodeMap(StrUtil.isEmpty(cmpInstance.getNodeId()) ? nodeId : cmpInstance.getNodeId(), node);
+			}
+			addFallbackNode(node);
+		} catch (Exception e) {
+			if (ruleDbManaged) {
+				com.yomahub.liteflow.repository.RuleDbRuntime.markScriptLoadFailed(node, e);
+			}
 			String error = StrUtil.format("component[{}] register error", StrUtil.isEmpty(name) ? nodeId : StrUtil.format("{}({})", nodeId, name));
 			LOG.error(e.getMessage());
-			throw new ComponentCannotRegisterException(StrUtil.format("{} {}", error, e.getMessage()));
-        }
-    }
+			throw new ComponentCannotRegisterException(StrUtil.format("{} {}", error, e.getMessage()), e);
+		}
+	}
+
+	public static void compileUnpublishedScriptNode(Node node) {
+		compileUnpublishedScriptNode(node, node.getId());
+	}
+
+	public static void compileUnpublishedScriptNode(Node node, String scriptArtifactId) {
+		String nodeId = node.getId();
+		String name = node.getName();
+		try {
+			NodeTypeEnum type = node.getType();
+			List<NodeComponent> cmpInstanceList = getNodeComponentList(nodeId, name, type,
+					ScriptComponent.ScriptComponentClassMap.get(type));
+			loadCompiledNode(node, nodeId, node.getScript(), node.getLanguage(), type,
+					cmpInstanceList.get(0), scriptArtifactId);
+		}
+		catch (Exception e) {
+			String error = StrUtil.format("component[{}] register error",
+					StrUtil.isEmpty(name) ? nodeId : StrUtil.format("{}({})", nodeId, name));
+			throw new ComponentCannotRegisterException(StrUtil.format("{} {}", error, e.getMessage()), e);
+		}
+	}
 
 	private static void addCompiledNode2Map(Node node, String nodeId, String script, String language, NodeTypeEnum type, NodeComponent cmpInstance) {
+		loadCompiledNode(node, nodeId, script, language, type, cmpInstance);
+		String activeNodeId = StrUtil.isEmpty(cmpInstance.getNodeId()) ? nodeId : cmpInstance.getNodeId();
+		put2NodeMap(activeNodeId, node);
+		addFallbackNode(node);
+	}
+
+	private static void loadCompiledNode(Node node, String nodeId, String script, String language, NodeTypeEnum type, NodeComponent cmpInstance) {
+		loadCompiledNode(node, nodeId, script, language, type, cmpInstance, nodeId);
+	}
+
+	private static void loadCompiledNode(Node node, String nodeId, String script, String language,
+			NodeTypeEnum type, NodeComponent cmpInstance, String scriptArtifactId) {
 		// 如果是脚本节点，则还要加载script脚本
 		if (type.isScript()) {
 			if (StrUtil.isNotBlank(script)) {
 				node.setScript(script);
 				node.setLanguage(language);
-				((ScriptComponent) cmpInstance).loadScript(script, language);
+				String componentNodeId = cmpInstance.getNodeId();
+				try {
+					cmpInstance.setNodeId(scriptArtifactId);
+					((ScriptComponent) cmpInstance).loadScript(script, language);
+				}
+				finally {
+					cmpInstance.setNodeId(componentNodeId);
+				}
+				node.setRuleDbScriptArtifactId(scriptArtifactId);
 				node.setCompiled(true);
 				node.setInstance(cmpInstance);
 			} else {
@@ -300,9 +362,6 @@ public class FlowBus {
 				throw new ScriptLoadException(errorMsg);
 			}
 		}
-		String activeNodeId = StrUtil.isEmpty(cmpInstance.getNodeId()) ? nodeId : cmpInstance.getNodeId();
-		put2NodeMap(activeNodeId, node);
-		addFallbackNode(node);
 	}
 
 	// 如果是spring自动扫描的组件，在addManagedNode方法中就已经完成了组装了
@@ -342,11 +401,11 @@ public class FlowBus {
                     + error;
 
             LOG.error(error, e);
-            throw new ComponentCannotRegisterException(StrUtil.format("{} {}", error, e.getMessage()));
+            throw new ComponentCannotRegisterException(StrUtil.format("{} {}", error, e.getMessage()), e);
         } catch (Exception e) {
 			String error = StrUtil.format("component[{}] register error", StrUtil.isEmpty(name) ? nodeId : StrUtil.format("{}({})", nodeId, name));
 			LOG.error(e.getMessage());
-			throw new ComponentCannotRegisterException(StrUtil.format("{} {}", error, e.getMessage()));
+			throw new ComponentCannotRegisterException(StrUtil.format("{} {}", error, e.getMessage()), e);
 		}
 	}
 
@@ -415,11 +474,46 @@ public class FlowBus {
 		return elMd5Map.get(elMd5);
 	}
 
-	public static boolean removeChain(String chainId) {
+	public static synchronized boolean removeElMd5Mapping(Chain chain, String elMd5) {
+		if (chain == null || chainMap.get(chain.getChainId()) != chain) {
+			return false;
+		}
+		String chainId = chain.getChainId();
+		return StrUtil.isBlank(elMd5) || elMd5Map.remove(elMd5, chainId);
+	}
+
+	public static synchronized boolean addElMd5Mapping(Chain chain, String elMd5) {
+		if (chain == null || chainMap.get(chain.getChainId()) != chain) {
+			return false;
+		}
+		if (StrUtil.isBlank(elMd5)) {
+			return true;
+		}
+		String chainId = chain.getChainId();
+		boolean[] installed = {false};
+		elMd5Map.compute(elMd5, (key, existingChainId) -> {
+			if (existingChainId == null || Objects.equals(existingChainId, chainId)) {
+				installed[0] = true;
+				return chainId;
+			}
+			Chain existingChain = chainMap.get(existingChainId);
+			if (existingChain == null
+					|| (!chain.isTransientElChain() && existingChain.isTransientElChain())) {
+				installed[0] = true;
+				return chainId;
+			}
+			return existingChainId;
+		});
+		return installed[0];
+	}
+
+	public static synchronized boolean removeChain(String chainId) {
 		if (containChain(chainId)) {
 			Chain removedChain = chainMap.remove(chainId);
-			// 移除 elMd5 对应的 chainId
-			elMd5Map.remove(removedChain.getElMd5());
+			// 移除 elMd5 对应的 chainId；影子 chain（rule-db 模式下 EL 从未加载）没有 elMd5
+			if (removedChain.getElMd5() != null) {
+				elMd5Map.remove(removedChain.getElMd5(), chainId);
+			}
 			return true;
 		}
 		else {
@@ -429,6 +523,20 @@ public class FlowBus {
 		}
 	}
 
+	public static boolean replaceChain(String chainId, Chain expected, Chain replacement) {
+		return chainMap.replace(chainId, expected, replacement);
+	}
+
+	public static synchronized boolean removeChain(String chainId, Chain expected) {
+		if (expected == null || !chainMap.remove(chainId, expected)) {
+			return false;
+		}
+		if (expected.getElMd5() != null) {
+			elMd5Map.remove(expected.getElMd5(), chainId);
+		}
+		return true;
+	}
+
 	public static void removeChain(String... chainIds) {
 		Arrays.stream(chainIds).forEach(FlowBus::removeChain);
 	}
@@ -436,6 +544,14 @@ public class FlowBus {
 	// 移除节点
 	public static boolean removeNode(String nodeId) {
 		return nodeMap.remove(nodeId) != null;
+	}
+
+	public static boolean removeNode(String nodeId, Node expected) {
+		return expected != null && nodeMap.remove(nodeId, expected);
+	}
+
+	public static boolean replaceNode(String nodeId, Node expected, Node replacement) {
+		return nodeMap.replace(nodeId, expected, replacement);
 	}
 
 	// 判断是否是降级组件，如果是则添加到 fallbackNodeMap

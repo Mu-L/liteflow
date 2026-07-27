@@ -18,6 +18,11 @@ public class ELParseException extends RuntimeException {
 		this.message = message;
 	}
 
+	public ELParseException(String message, Throwable cause) {
+		super(message, cause);
+		this.message = message;
+	}
+
 	@Override
 	public String getMessage() {
 		return message;

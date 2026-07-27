@@ -62,11 +62,33 @@ public class CmpStep {
 	// 运行线程名称
 	private String threadName;
 
+	// 所属 chainId（诊断用：节点被多条链复用时回溯调用路径）
+	private String chainId;
+
+	// 循环迭代下标（诊断用：循环内失败时定位是第几次迭代，非循环场景为 null）
+	private Integer loopIndex;
+
 
 	public CmpStep(String nodeId, String nodeName, CmpStepTypeEnum stepType) {
 		this.nodeId = nodeId;
 		this.nodeName = nodeName;
 		this.stepType = stepType;
+	}
+
+	public String getChainId() {
+		return chainId;
+	}
+
+	public void setChainId(String chainId) {
+		this.chainId = chainId;
+	}
+
+	public Integer getLoopIndex() {
+		return loopIndex;
+	}
+
+	public void setLoopIndex(Integer loopIndex) {
+		this.loopIndex = loopIndex;
 	}
 
 	public String getNodeInstanceId() {

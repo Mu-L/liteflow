@@ -16,6 +16,8 @@ public class ScriptExecuteWrap {
 
 	public String nodeId;
 
+	public String scriptNodeId;
+
 	public String tag;
 
 	public Object cmpData;
@@ -64,6 +66,14 @@ public class ScriptExecuteWrap {
 
 	public void setNodeId(String nodeId) {
 		this.nodeId = nodeId;
+	}
+
+	public String getScriptNodeId() {
+		return scriptNodeId == null ? nodeId : scriptNodeId;
+	}
+
+	public void setScriptNodeId(String scriptNodeId) {
+		this.scriptNodeId = scriptNodeId;
 	}
 
 	public String getTag() {

@@ -39,6 +39,7 @@ import com.yomahub.liteflow.parser.factory.FlowParserProvider;
 import com.yomahub.liteflow.parser.spi.ParserClassNameSpi;
 import com.yomahub.liteflow.property.LiteflowConfig;
 import com.yomahub.liteflow.property.LiteflowConfigGetter;
+import com.yomahub.liteflow.repository.RuleDbRuntime;
 import com.yomahub.liteflow.slot.DataBus;
 import com.yomahub.liteflow.slot.DefaultContext;
 import com.yomahub.liteflow.slot.Slot;
@@ -118,6 +119,23 @@ public class FlowExecutor {
 		if (isStart && liteflowConfig.getChainCacheEnabled()) {
 			// 放到解析节点后，是因为要根据节点数量判断缓存大小设置是否合理
 			initChainCache();
+		}
+
+		// Rule-DB 模式：classpath 存在 RuleRepository 实现且启用
+		if (com.yomahub.liteflow.repository.RuleDbRuntime.isActive()) {
+			if (StrUtil.isNotBlank(liteflowConfig.getRuleSource())) {
+				throw new ConfigErrorException("rule-source and rule-db mode cannot be used together, please remove one of them");
+			}
+			com.yomahub.liteflow.repository.RuleDbRuntime.init();
+			// 与非 rule-db 路径保持一致：启动阶段需执行初始化钩子（如 javax-pro 的 loadSecondPhase 批量编译），
+			// 并把 startUpPhase 复位为 false。否则 startUpPhase 会一直停留在 true，导致 rule-db 在运行期
+			// 懒加载脚本时 JavaxProExecutor.load 走启动期缓冲分支（只入 codeSpecMap，不入 compiledScriptMap），
+			// loadSecondPhase 又不会在运行期触发，最终 execute 报 "script for node[x] is not loaded"。
+			if (isStart) {
+				FlowInitHook.executeHook();
+			}
+			startUpPhase.compareAndSet(true, false);
+			return;
 		}
 
 		String ruleSource = liteflowConfig.getRuleSource();
@@ -346,6 +364,7 @@ public class FlowExecutor {
 			chainId = IdUtil.fastSimpleUUID();
 			LiteFlowChainELBuilder.createChain()
 					.setChainId(chainId)
+					.setTransientElChain(true)
 					.setEL(normalizedEl)
 					.build();
 		}
@@ -682,10 +701,13 @@ public class FlowExecutor {
 			namespace = ChainConstant.DEFAULT_NAMESPACE;
 		}
 
+		if (RuleDbRuntime.isActive()) {
+			RuleDbRuntime.prepareRouteChains();
+		}
+
 		String finalNamespace = namespace;
 		List<Chain> routeChainList = FlowBus.getChainMap().values().stream()
-				.filter(chain -> chain.getNamespace().equals(finalNamespace))
-				.filter(chain -> chain.getRouteItem() != null).collect(Collectors.toList());
+				.filter(chain -> chain.hasRouteInNamespace(finalNamespace)).collect(Collectors.toList());
 
 		if (CollUtil.isEmpty(routeChainList)){
 			String errorMsg = StrUtil.format("no route found for namespace[{}]", finalNamespace);
