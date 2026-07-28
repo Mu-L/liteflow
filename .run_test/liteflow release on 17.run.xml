@@ -19,10 +19,10 @@
           <option name="pomFileName" />
           <option name="profilesMap">
             <map>
-              <entry key="release-on-17" value="true" />
-              <entry key="open" value="true" />
-              <entry key="compile-8-to-16" value="false" />
               <entry key="compile-17+" value="false" />
+              <entry key="release-on-17" value="true" />
+              <entry key="compile-8-to-16" value="false" />
+              <entry key="open" value="true" />
             </map>
           </option>
           <option name="projectsCmdOptionValues">
