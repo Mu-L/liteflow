@@ -86,5 +86,6 @@ atlassian-ide-plugin.xml
 .claude
 .vscode
 .codegraph
+/.superpowers/
 *.factorypath
 /.worktrees/
