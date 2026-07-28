@@ -89,3 +89,4 @@ atlassian-ide-plugin.xml
 /.superpowers/
 *.factorypath
 /.worktrees/
+.node_instance_id
